@@ -274,6 +274,36 @@ internal sealed class VisualStudioDriver : IDisposable
         }
     }
 
+    /// <summary>
+    /// Logs the text of every console window (the Dev Container profile's launcher runs in one) and saves it as
+    /// console-N.txt, to see what the launcher printed.
+    /// </summary>
+    public void LogConsoles()
+    {
+        var index = 0;
+        foreach (var window in TryFindAll(() => this.automation.GetDesktop().FindAllChildren(cf => cf.ByControlType(ControlType.Window))))
+        {
+            var className = window.Properties.ClassName.ValueOrDefault ?? string.Empty;
+            if (className is not ("ConsoleWindowClass" or "CASCADIA_HOSTING_WINDOW_CLASS") && !(window.Properties.Name.ValueOrDefault ?? string.Empty).Contains("powershell", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var text = TryFind(() => window.Patterns.Text.IsSupported ? window : window.FindFirstDescendant(cf => cf.ByControlType(ControlType.Document)))
+                is { } document && document.Patterns.Text.TryGetPattern(out var pattern)
+                ? pattern.DocumentRange.GetText(-1).TrimEnd()
+                : "(no text available)";
+            var path = Path.Combine(this.artifacts, $"console-{++index}.txt");
+            File.WriteAllText(path, text);
+            this.log($"Console window '{window.Properties.Name.ValueOrDefault}' ({className}), last lines:{Environment.NewLine}{string.Join(Environment.NewLine, text.Split('\n').TakeLast(40))}");
+        }
+
+        if (index == 0)
+        {
+            this.log("No console window is open.");
+        }
+    }
+
     /// <summary>Shows the Output window and saves a screenshot and, when UI Automation exposes it, its text.</summary>
     public void SaveOutputPane()
     {

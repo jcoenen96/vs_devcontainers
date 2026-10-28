@@ -56,8 +56,11 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             // 3. Debug > Start Without Debugging runs the app inside the container; the host reaches it on port 5080.
             var runStarted = DateTime.Now;
             vs.ClickMenu("Debug", "Start Without Debugging");
-            var info = await WaitForApiAsync(TimeSpan.FromMinutes(10), vs);
-            vs.Screenshot("03-app-running");
+            await Task.Delay(TimeSpan.FromSeconds(60));
+            vs.Screenshot("03-starting");
+            vs.LogConsoles();
+            var info = await WaitForApiAsync(TimeSpan.FromMinutes(7), vs);
+            vs.Screenshot("04-app-running");
             this.Log("GET /api/info: " + info);
             Assert.Contains("\"inContainer\":true", info);
 
@@ -79,12 +82,15 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
                 TimeSpan.FromMinutes(2),
                 "the container to stop",
                 vs);
-            vs.Screenshot("04-container-stopped");
+            vs.Screenshot("05-container-stopped");
         }
         catch
         {
             vs.Screenshot("failure");
             vs.LogWindows();
+            vs.LogConsoles();
+            this.LogProcesses();
+            await this.LogContainerProcessesAsync(engine, configFile);
             throw;
         }
         finally
@@ -155,6 +161,46 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
         }
 
         return count;
+    }
+
+    private void LogProcesses()
+    {
+        foreach (var name in new[] { "powershell", "pwsh", "node", "dotnet", "podman" })
+        {
+            foreach (var process in Process.GetProcessesByName(name))
+            {
+                using (process)
+                {
+                    try
+                    {
+                        this.Log($"Process {name} {process.Id}, started {process.StartTime:HH:mm:ss}, window '{process.MainWindowTitle}'");
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                    {
+                        // Exited meanwhile.
+                    }
+                }
+            }
+        }
+    }
+
+    private async Task LogContainerProcessesAsync(ContainerEngineClient engine, DevContainerConfigFile configFile)
+    {
+        try
+        {
+            foreach (var container in await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default))
+            {
+                var ps = await new ProcessRunner().RunAsync(
+                    new ProcessSpec(engine.Runtime.ExecutablePath, ["exec", container.Id, "ps", "-eo", "pid,pgid,lstart,args"]),
+                    null,
+                    default);
+                this.Log($"Container {container.Id} ({container.State}) processes:{Environment.NewLine}{ps.StandardOutput}{ps.StandardError}");
+            }
+        }
+        catch (Exception ex)
+        {
+            this.Log($"Could not list the container's processes: {ex.Message}");
+        }
     }
 
     private static string FindRepository()
