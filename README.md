@@ -21,12 +21,14 @@ inside it.
 Containers are created by the official [`@devcontainers/cli`](https://github.com/devcontainers/cli), the reference
 implementation of the spec. That gives images, Dockerfiles, Docker Compose, features, lifecycle hooks and
 variable substitution without reimplementing them, and containers stay compatible with the ones VS Code creates
-for the same folder.
+for the same folder. [docs/devcontainer-cli-integration.md](docs/devcontainer-cli-integration.md) explains how the
+extension drives the CLI.
 
 ```
 src/DevContainers.Core           Config discovery, Docker/Podman detection, devcontainer CLI wrapper (net10.0, no VS dependency)
 src/DevContainers.VisualStudio   The extension (VisualStudio.Extensibility, out of process)
 tests/DevContainers.Core.Tests   Unit tests, plus a real-container integration test
+docs/                            How the extension works
 samples/dotnet-console           A small solution with a .devcontainer to try it on
 ```
 
