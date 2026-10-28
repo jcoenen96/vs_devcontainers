@@ -107,7 +107,11 @@ jobs:
           Get-ChildItem $env:TEMP -Filter 'dd_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 6 | Copy-Item -Destination $env:ARTIFACTS
           $installed = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\VisualStudio", (Split-Path $devenv) -Filter DevContainers.VisualStudio.dll -Recurse -Depth 6 -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $installed) {
-            Get-ChildItem "$env:ARTIFACTS" -Filter '*.log' | ForEach-Object { "--- $($_.Name)"; Get-Content $_.FullName -Tail 40 }
+            Get-ChildItem $env:TEMP -Filter 'dd_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 4 | ForEach-Object {
+              "--- $($_.Name)"
+              Select-String -Path $_.FullName -Pattern 'error|fail|warn|vsix|DevContainers|extension|elevat' | Select-Object -Last 40 | ForEach-Object { $_.Line }
+            }
+            Get-Process | Where-Object { $_.Path -like '*Microsoft Visual Studio*' } | Format-Table Name, Id, Path -AutoSize
             throw 'The extension could not be installed.'
           }
           "Installed at $($installed.DirectoryName)"
