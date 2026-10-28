@@ -1,0 +1,114 @@
+name: End-to-end (Visual Studio on Windows)
+
+# Installs the extension into a real Visual Studio 2026 on a Windows runner, starts Podman (Linux containers through
+# WSL2), and drives Visual Studio through UI Automation: open the sample Web API, Open in Container, Start Without
+# Debugging, call the API from Windows, stop the app and the container.
+# See docs/end-to-end-tests.md.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Visual Studio + Podman
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    env:
+      ARTIFACTS: ${{ github.workspace }}\e2e-artifacts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the machine
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force $env:ARTIFACTS | Out-Null
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -version '[18.0,)' -format json | ConvertFrom-Json
+          "Visual Studio: $($vs.displayName) $($vs.catalog.productDisplayVersion) at $($vs.installationPath)"
+          if (-not $vs) { throw 'Visual Studio 2026 is not installed on this runner.' }
+          wsl --version
+          wsl --status
+          docker version --format '{{.Server.Version}} {{.Server.Os}}'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: '[18.0,)'
+
+      - name: Build the extension and the UI test
+        run: msbuild VsDevContainers.slnx /restore /p:Configuration=Release /v:minimal
+
+      - name: Install the devcontainer CLI
+        run: npm install -g @devcontainers/cli@0.90.0
+
+      - name: Install Podman
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = gh release view --repo containers/podman --json assets -q '.assets[].name'
+          $asset = @($assets | Where-Object { $_ -match 'windows.*amd64.*\.msi$' }) + @($assets | Where-Object { $_ -match 'windows.*amd64.*\.exe$' }) | Select-Object -First 1
+          if (-not $asset) { throw "No Podman Windows installer in the latest release: $($assets -join ', ')" }
+          gh release download --repo containers/podman --pattern $asset --dir $env:RUNNER_TEMP
+          $file = Join-Path $env:RUNNER_TEMP $asset
+          "Installing $asset"
+          if ($asset.EndsWith('.msi')) {
+            $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$file`"", '/qn', '/norestart', '/l*v', "`"$env:ARTIFACTS\podman-install.log`"" -Wait -PassThru
+          } else {
+            $p = Start-Process $file -ArgumentList '/install', '/quiet', '/norestart', '/log', "`"$env:ARTIFACTS\podman-install.log`"" -Wait -PassThru
+          }
+          "Installer exit code: $($p.ExitCode)"
+          $podman = Get-ChildItem "$env:ProgramFiles\RedHat\Podman", "$env:LOCALAPPDATA\Programs\RedHat\Podman" -Filter podman.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $podman) { throw 'podman.exe was not installed.' }
+          $podman.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Start the Podman machine (WSL2)
+        shell: pwsh
+        run: |
+          podman --version
+          podman machine init --now --cpus 2 --memory 6144
+          if ($LASTEXITCODE -ne 0) { throw 'podman machine init failed. GitHub-hosted runners do not officially support nested virtualization (WSL2).' }
+          podman version
+          podman run --rm docker.io/library/alpine:3.20 uname -a
+
+      - name: Pull the sample's dev container image
+        run: podman pull mcr.microsoft.com/devcontainers/dotnet:10.0
+
+      - name: Install the extension into Visual Studio
+        shell: pwsh
+        run: |
+          $vsix = Get-ChildItem src/DevContainers.VisualStudio/bin/Release -Recurse -Filter *.vsix | Select-Object -First 1
+          $devenv = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -version '[18.0,)' -property productPath
+          $installer = Join-Path (Split-Path $devenv) 'VSIXInstaller.exe'
+          "Installing $($vsix.FullName) with $installer"
+          $p = Start-Process $installer -ArgumentList '/quiet', "/logFile:`"$env:ARTIFACTS\vsixinstaller.log`"", "`"$($vsix.FullName)`"" -Wait -PassThru
+          "VSIXInstaller exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Get-Content "$env:ARTIFACTS\vsixinstaller.log" -Tail 60; throw 'The extension could not be installed.' }
+
+      - name: Drive Visual Studio
+        env:
+          DEVCONTAINERS_UITEST: "1"
+          DEVCONTAINERS_UITEST_ARTIFACTS: ${{ env.ARTIFACTS }}
+        run: dotnet test tests/DevContainers.VisualStudio.UITests/DevContainers.VisualStudio.UITests.csproj -c Release --no-build --logger "console;verbosity=detailed"
+
+      - name: Collect logs
+        if: always()
+        shell: pwsh
+        run: |
+          podman ps -a 2>&1 | Out-File "$env:ARTIFACTS\podman-ps.txt"
+          if (Test-Path "$env:TEMP\servicehub\logs") { Copy-Item "$env:TEMP\servicehub\logs" "$env:ARTIFACTS\servicehub-logs" -Recurse -ErrorAction SilentlyContinue }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-windows
+          path: e2e-artifacts
+          if-no-files-found: ignore

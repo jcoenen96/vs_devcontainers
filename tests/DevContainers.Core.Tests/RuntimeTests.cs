@@ -15,7 +15,7 @@ public class RuntimeTests
     [Fact]
     public async Task Detect_PrefersDockerWhenRunning()
     {
-        var runner = new FakeProcessRunner(_ => FakeProcessRunner.Ok("27.3.1\n"));
+        var runner = new FakeProcessRunner(_ => FakeProcessRunner.Ok("27.3.1 linux\n"));
 
         var runtime = await new ContainerRuntimeDetector(runner, BothInstalled).DetectAsync(ContainerRuntimePreference.Auto, null, default);
 
@@ -34,6 +34,21 @@ public class RuntimeTests
 
         Assert.Equal(ContainerRuntimeKind.Podman, runtime.Kind);
         Assert.Equal("/usr/bin/podman-compose", runtime.ComposePath);
+    }
+
+    [Fact]
+    public async Task Detect_SkipsDockerInWindowsContainersMode()
+    {
+        var runner = new FakeProcessRunner(spec => spec.FileName.EndsWith("docker", StringComparison.Ordinal)
+            ? FakeProcessRunner.Ok("29.7.2 windows\n")
+            : FakeProcessRunner.Ok("5.6.1 linux\n"));
+
+        var runtime = await new ContainerRuntimeDetector(runner, BothInstalled).DetectAsync(ContainerRuntimePreference.Auto, null, default);
+
+        Assert.Equal(new ContainerRuntime(ContainerRuntimeKind.Podman, "/usr/bin/podman", "5.6.1"), runtime);
+        var ex = await Assert.ThrowsAsync<ContainerRuntimeNotFoundException>(
+            () => new ContainerRuntimeDetector(runner, BothInstalled).DetectAsync(ContainerRuntimePreference.Docker, null, default));
+        Assert.Contains("Windows containers", ex.Message);
     }
 
     [Fact]

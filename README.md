@@ -30,6 +30,7 @@ extension drives the CLI.
 src/DevContainers.Core           Config discovery, Docker/Podman detection, devcontainer CLI wrapper (net10.0, no VS dependency)
 src/DevContainers.VisualStudio   The extension (VisualStudio.Extensibility, out of process)
 tests/DevContainers.Core.Tests   Unit tests, plus a real-container integration test
+tests/DevContainers.VisualStudio.UITests   Drives a real Visual Studio end to end (docs/end-to-end-tests.md)
 docs/                            How the extension works
 samples/dotnet-console           A small solution with a .devcontainer to try it on
 samples/dotnet-webapi            A Web API with a .devcontainer, to test reaching the app in the container from the host

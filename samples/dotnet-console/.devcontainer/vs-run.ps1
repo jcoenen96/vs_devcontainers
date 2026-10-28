@@ -117,8 +117,9 @@ function Find-ContainerEngine {
     foreach ($name in $names) {
         $command = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $command) { continue }
-        $version = & $command.Source version --format '{{.Server.Version}}' 2>$null
-        if ($LASTEXITCODE -eq 0 -and $version) {
+        $version, $os = "$(& $command.Source version --format '{{.Server.Version}} {{.Server.Os}}' 2>$null)" -split ' ', 2
+        # An engine in Windows containers mode cannot run dev containers, which are Linux containers.
+        if ($LASTEXITCODE -eq 0 -and $version -and $os -ne 'windows') {
             Write-Step "Using $name $version"
             return $command.Source
         }
