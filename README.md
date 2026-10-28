@@ -60,17 +60,73 @@ Settings are under **Tools > Options > Dev Containers**: container engine (Autom
 paths to the engine and the CLI when they are not on PATH. Automatic uses Docker when it is running and falls
 back to Podman.
 
-## Building
+## Build and install it yourself
+
+The extension is not on the Marketplace yet, so you build the `.vsix` (or download it from CI) and install it.
+
+### What you need
+
+- Visual Studio 2026 with the **Visual Studio extension development** workload (Visual Studio Installer >
+  Modify > Workloads). It provides the tools that package the `.vsix` and the experimental instance for F5.
+- The .NET 10 SDK (`winget install Microsoft.DotNet.SDK.10`) if it is not already installed with Visual Studio.
+- Docker Desktop or Podman. Node.js and the devcontainer CLI are offered for installation the first time you open
+  a container (see [Using it](#using-it)).
+
+### 1. Get the .vsix
+
+**Download it:** every pull request and push to `main` runs CI, which uploads the extension as the
+`DevContainers.VisualStudio.vsix` artifact. Open the run under the repository's **Actions** tab, download the
+artifact and unzip it.
+
+**Or build it:**
+
+1. Clone the repository: `git clone https://github.com/jcoenen96/vs_devcontainers.git`
+2. Open `VsDevContainers.slnx` in Visual Studio 2026, pick the **Release** configuration and choose
+   **Build > Build Solution**. Or, from a **Developer PowerShell for VS 2026** in the repository folder:
+
+   ```
+   msbuild VsDevContainers.slnx /restore /p:Configuration=Release
+   ```
+
+3. The extension is at `src\DevContainers.VisualStudio\bin\Release\net10.0-windows\DevContainers.VisualStudio.vsix`.
+
+### 2. Install it
+
+1. Close every Visual Studio window.
+2. Double-click `DevContainers.VisualStudio.vsix`. The VSIX Installer opens; select Visual Studio 2026 and choose
+   **Install**.
+3. Start Visual Studio. **Extensions > Manage Extensions > Installed** now lists **Dev Containers**, and the
+   **Extensions** menu has a **Dev Containers** submenu.
+
+To update, install a newer `.vsix` the same way. To remove it, use **Manage Extensions > Installed > Dev
+Containers > Uninstall** and restart Visual Studio.
+
+### 3. Try it
+
+1. Make sure Docker Desktop or Podman is running.
+2. Open `samples\dotnet-console\HelloContainer.slnx` from the repository.
+3. Choose **Extensions > Dev Containers > Open in Container**. If Node.js or the devcontainer CLI is missing,
+   choose **Install now** and wait for the window to close.
+4. Follow the build in **View > Output**, "Show output from: Dev Containers". When the container is running,
+   **Extensions > Dev Containers > Open Container Terminal** gives you a shell inside it. Try `dotnet run
+   --project HelloContainer`: it prints the container's Linux version.
+
+### Debugging the extension
+
+Open `VsDevContainers.slnx`, set `DevContainers.VisualStudio` as the startup project and press **F5**. A second
+Visual Studio instance (the experimental instance) starts with the extension loaded, without installing it into
+your normal Visual Studio. Breakpoints in the extension and in `DevContainers.Core` are hit there.
+
+### Running the tests
 
 ```
-dotnet test tests/DevContainers.Core.Tests                     # any OS
-DEVCONTAINERS_INTEGRATION=1 dotnet test tests/DevContainers.Core.Tests   # also runs a real container
-msbuild VsDevContainers.slnx /restore                           # Windows, produces the .vsix
+dotnet test tests/DevContainers.Core.Tests                                 # any OS
+DEVCONTAINERS_INTEGRATION=1 dotnet test tests/DevContainers.Core.Tests     # also runs a real container
 ```
 
-Press F5 in Visual Studio with `DevContainers.VisualStudio` as the startup project to debug the extension in an
-experimental instance. CI builds the VSIX on every pull request and runs the integration test against both
-Docker and Podman.
+The integration test needs Docker or Podman and the devcontainer CLI. Set `DEVCONTAINERS_RUNTIME=podman` to run
+it against Podman. On Windows PowerShell, set the variables with `$env:DEVCONTAINERS_INTEGRATION = "1"` first.
+CI runs the tests against both Docker and Podman and builds the VSIX on every pull request.
 
 ## Plan
 
