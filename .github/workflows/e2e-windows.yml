@@ -66,8 +66,13 @@ jobs:
             $p = Start-Process $file -ArgumentList '/install', '/quiet', '/norestart', '/log', "`"$env:ARTIFACTS\podman-install.log`"" -Wait -PassThru
           }
           "Installer exit code: $($p.ExitCode)"
-          $podman = Get-ChildItem "$env:ProgramFiles\RedHat\Podman", "$env:LOCALAPPDATA\Programs\RedHat\Podman" -Filter podman.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $podman) { throw 'podman.exe was not installed.' }
+          # The MSI installs per machine or per user depending on its version; look in both places.
+          $podman = Get-ChildItem "$env:ProgramFiles", "$env:LOCALAPPDATA\Programs" -Filter podman.exe -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $podman) {
+            Select-String -Path "$env:ARTIFACTS\podman-install.log" -Pattern 'INSTALLFOLDER|INSTALLDIR|ALLUSERS|Return value 3|error' | Select-Object -First 40 | ForEach-Object { $_.Line }
+            throw 'podman.exe was not installed.'
+          }
+          "Podman is at $($podman.FullName)"
           $podman.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: Start the Podman machine (WSL2)
