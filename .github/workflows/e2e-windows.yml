@@ -112,7 +112,29 @@ jobs:
           }
           "Installed at $($installed.DirectoryName)"
 
+      - name: Run the launcher with Windows PowerShell
+        # The Dev Container launch profile's script on its own, with its output in this log: Windows PowerShell 5.1,
+        # Windows paths, Podman. Visual Studio runs the same command line.
+        shell: pwsh
+        working-directory: samples/dotnet-webapi/HelloApi
+        run: |
+          $out = Join-Path $env:ARTIFACTS 'launcher-out.txt'
+          $err = Join-Path $env:ARTIFACTS 'launcher-err.txt'
+          $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '..\.devcontainer\vs-run.ps1', '-LaunchProfile', 'http' -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+          $info = $null
+          $deadline = (Get-Date).AddMinutes(8)
+          while (-not $info -and -not $p.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep 5
+            try { $info = (Invoke-WebRequest http://localhost:5080/api/info -UseBasicParsing -TimeoutSec 5).Content } catch { }
+          }
+          '--- launcher output'; Get-Content $out
+          '--- launcher errors'; Get-Content $err
+          if (-not $p.HasExited) { taskkill /T /F /PID $p.Id | Out-Null }
+          "GET /api/info: $info"
+          if ($info -notmatch '"inContainer":true') { throw 'The launcher did not start the sample API in the container.' }
+
       - name: Drive Visual Studio
+        if: success() || failure()
         env:
           DEVCONTAINERS_UITEST: "1"
           DEVCONTAINERS_UITEST_ARTIFACTS: ${{ env.ARTIFACTS }}

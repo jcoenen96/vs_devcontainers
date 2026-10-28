@@ -42,6 +42,8 @@ param(
 # Native tools report failure through exit codes, which are checked below. 'Stop' would turn their stderr output
 # into errors on Windows PowerShell 5.1.
 $ErrorActionPreference = 'Continue'
+# DEVCONTAINERS_RUN_LOG=<file> keeps a transcript of the run, for diagnosing a window that closed too fast.
+if ($env:DEVCONTAINERS_RUN_LOG) { Start-Transcript -Path $env:DEVCONTAINERS_RUN_LOG -Append | Out-Null }
 $onWindows = $env:OS -eq 'Windows_NT'
 $workspace = Split-Path -Parent $PSScriptRoot
 $configFile = if ($Config) { $Config } else { Join-Path $PSScriptRoot 'devcontainer.json' }

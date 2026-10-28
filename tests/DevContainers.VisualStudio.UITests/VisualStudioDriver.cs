@@ -274,6 +274,17 @@ internal sealed class VisualStudioDriver : IDisposable
         }
     }
 
+    /// <summary>Logs what the Debug Target (launch profile) toolbar button shows.</summary>
+    public void LogDebugTarget()
+    {
+        var target = TryFind(() => this.Main.FindFirstDescendant(cf => cf.ByName("Debug Target")));
+        var parts = target is null
+            ? []
+            : new[] { target }.Concat(TryFindAll(() => target.FindAllDescendants()))
+                .Select(e => $"{e.Properties.ControlType.ValueOrDefault} '{e.Properties.Name.ValueOrDefault}' '{e.Properties.HelpText.ValueOrDefault}'");
+        this.log("Debug Target: " + string.Join(" | ", parts));
+    }
+
     /// <summary>
     /// Logs the text of every console window (the Dev Container profile's launcher runs in one) and saves it as
     /// console-N.txt, to see what the launcher printed.
@@ -289,8 +300,10 @@ internal sealed class VisualStudioDriver : IDisposable
                 continue;
             }
 
-            var text = TryFind(() => window.Patterns.Text.IsSupported ? window : window.FindFirstDescendant(cf => cf.ByControlType(ControlType.Document)))
-                is { } document && document.Patterns.Text.TryGetPattern(out var pattern)
+            // Windows Terminal exposes the buffer through the Text pattern of its terminal control, deeper in the tree.
+            var withText = new[] { window }.Concat(TryFindAll(() => window.FindAllDescendants()))
+                .FirstOrDefault(e => { try { return e.Patterns.Text.IsSupported; } catch (Exception) { return false; } });
+            var text = withText is not null && withText.Patterns.Text.TryGetPattern(out var pattern)
                 ? pattern.DocumentRange.GetText(-1).TrimEnd()
                 : "(no text available)";
             var path = Path.Combine(this.artifacts, $"console-{++index}.txt");

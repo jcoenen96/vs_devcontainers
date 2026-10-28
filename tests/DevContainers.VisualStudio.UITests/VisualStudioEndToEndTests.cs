@@ -31,6 +31,10 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
         var engine = new ContainerEngineClient(runtime, new ProcessRunner());
         this.Log($"Container engine: {runtime.Kind} {runtime.ServerVersion}. Workspace: {configFile.WorkspaceFolder}");
 
+        // The Dev Container profile's launcher (started by Visual Studio, which inherits this) writes a transcript here.
+        var runLog = Path.Combine(artifacts, "vs-run-transcript.txt");
+        Environment.SetEnvironmentVariable("DEVCONTAINERS_RUN_LOG", runLog);
+
         using var vs = VisualStudioDriver.Launch(Path.Combine(configFile.WorkspaceFolder, "HelloApi.slnx"), artifacts, this.Log);
         try
         {
@@ -55,6 +59,7 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
 
             // 3. Debug > Start Without Debugging runs the app inside the container; the host reaches it on port 5080.
             var runStarted = DateTime.Now;
+            vs.LogDebugTarget();
             vs.ClickMenu("Debug", "Start Without Debugging");
             await Task.Delay(TimeSpan.FromSeconds(60));
             vs.Screenshot("03-starting");
@@ -89,6 +94,7 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             vs.Screenshot("failure");
             vs.LogWindows();
             vs.LogConsoles();
+            this.Log(File.Exists(runLog) ? "Launcher transcript:" + Environment.NewLine + File.ReadAllText(runLog) : "The launcher wrote no transcript.");
             this.LogProcesses();
             await this.LogContainerProcessesAsync(engine, configFile);
             throw;
