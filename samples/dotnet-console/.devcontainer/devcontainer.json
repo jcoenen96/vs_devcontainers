@@ -1,0 +1,9 @@
+// A small .NET dev container for trying the extension.
+{
+  "name": "dotnet-console",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:8.0",
+  "postCreateCommand": "dotnet --info",
+  "customizations": {
+    "visualstudio": {}
+  }
+}

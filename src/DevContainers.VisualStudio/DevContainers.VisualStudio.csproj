@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows8.0</TargetFramework>
+    <RootNamespace>DevContainers.VisualStudio</RootNamespace>
+    <!-- Lets the extension compile (but not package) on Linux and macOS. The VSIX is produced on Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Output window and settings APIs are still marked preview in the Extensibility SDK. -->
+    <NoWarn>$(NoWarn);VSEXTPREVIEW_OUTPUTWINDOW;VSEXTPREVIEW_SETTINGS</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.Extensibility.Sdk" Version="17.14.40608" />
+    <PackageReference Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DevContainers.Core\DevContainers.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DevContainers.Core/DevContainers.Core.csproj" />
+    <Project Path="src/DevContainers.VisualStudio/DevContainers.VisualStudio.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DevContainers.Core.Tests/DevContainers.Core.Tests.csproj" />
+  </Folder>
+</Solution>
