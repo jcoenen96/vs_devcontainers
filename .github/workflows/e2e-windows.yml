@@ -94,9 +94,12 @@ jobs:
           $devenv = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -version '[18.0,)' -property productPath
           $installer = Join-Path (Split-Path $devenv) 'VSIXInstaller.exe'
           "Installing $($vsix.FullName) with $installer"
-          $p = Start-Process $installer -ArgumentList '/quiet', "/logFile:`"$env:ARTIFACTS\vsixinstaller.log`"", "`"$($vsix.FullName)`"" -Wait -PassThru
+          # VSIXInstaller writes its log, under the given file name, to %TEMP%.
+          $p = Start-Process $installer -ArgumentList '/quiet', '/logFile:vsixinstaller.log', "`"$($vsix.FullName)`"" -Wait -PassThru
           "VSIXInstaller exit code: $($p.ExitCode)"
-          if ($p.ExitCode -ne 0) { Get-Content "$env:ARTIFACTS\vsixinstaller.log" -Tail 60; throw 'The extension could not be installed.' }
+          $logs = Get-ChildItem $env:TEMP -Filter '*VSIXInstaller*' -ErrorAction SilentlyContinue
+          $logs | Copy-Item -Destination $env:ARTIFACTS
+          if ($p.ExitCode -ne 0) { $logs | ForEach-Object { "--- $($_.Name)"; Get-Content $_.FullName -Tail 80 }; throw 'The extension could not be installed.' }
 
       - name: Drive Visual Studio
         env:
