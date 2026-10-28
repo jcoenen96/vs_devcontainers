@@ -1,0 +1,25 @@
+// An ASP.NET Core Web API dev container for testing that the app is reachable from the host.
+{
+  "name": "dotnet-webapi",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:10.0",
+  // Kestrel has to listen on every interface inside the container, not only on its loopback, or a published or
+  // forwarded port leads nowhere. Properties/launchSettings.json does the same for launches that use a profile.
+  "containerEnv": {
+    "ASPNETCORE_URLS": "http://0.0.0.0:5080",
+    "ASPNETCORE_ENVIRONMENT": "Development"
+  },
+  // appPort is published by Docker or Podman when the container is created (docker run -p 5080:5080), so it works
+  // today without the extension forwarding anything. The port is fixed when the container is created: rebuild the
+  // container after changing it.
+  "appPort": [5080],
+  // forwardPorts is the spec's preferred way, done by the tool while the container runs. The devcontainer CLI does
+  // not forward ports and the extension does not yet either (step 4 of the plan); VS Code does.
+  "forwardPorts": [5080],
+  "portsAttributes": {
+    "5080": { "label": "HelloApi" }
+  },
+  "postCreateCommand": "dotnet restore HelloApi.slnx",
+  "customizations": {
+    "visualstudio": {}
+  }
+}
