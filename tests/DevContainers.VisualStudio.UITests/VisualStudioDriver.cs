@@ -76,15 +76,22 @@ internal sealed class VisualStudioDriver : IDisposable
         }
     }
 
-    /// <summary>Waits until an element with this name (a toolbar item, a tree node) exists in the IDE window.</summary>
-    public void WaitForElement(string name, TimeSpan timeout, string what)
+    /// <summary>
+    /// Waits until an element whose name contains this text (a toolbar item, a tree node) exists in the IDE window.
+    /// Returns false on timeout, after logging the toolbar items, so the caller can decide whether that is fatal.
+    /// </summary>
+    public bool WaitForElement(string nameContains, TimeSpan timeout, string what)
     {
         var deadline = DateTime.UtcNow + timeout;
-        while (TryFind(() => this.Main.FindFirstDescendant(cf => cf.ByName(name))) is null)
+        while (TryFind(() => this.Main.FindFirstDescendant(cf => cf.ByName(nameContains, PropertyConditionFlags.MatchSubstring))) is null)
         {
             if (DateTime.UtcNow > deadline)
             {
-                throw new TimeoutException($"Timed out after {timeout} waiting for {what}.");
+                var toolbarItems = TryFindAll(() => this.Main.FindAllDescendants(cf => cf.ByControlType(ControlType.ToolBar)))
+                    .SelectMany(bar => TryFindAll(() => bar.FindAllChildren()))
+                    .Select(item => $"{item.Properties.ControlType.ValueOrDefault} '{item.Properties.Name.ValueOrDefault}'");
+                this.log($"Did not find {what} within {timeout}. Toolbar items: {string.Join(" | ", toolbarItems.Take(80))}");
+                return false;
             }
 
             this.DismissKnownDialogs();
@@ -92,6 +99,7 @@ internal sealed class VisualStudioDriver : IDisposable
         }
 
         this.log($"Found {what}.");
+        return true;
     }
 
     /// <summary>Opens a menu path from the main menu bar and invokes the last item.</summary>

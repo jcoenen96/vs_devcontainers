@@ -35,7 +35,9 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
         try
         {
             // 1. The solution loads and the "Dev Container" launch profile is the selected one.
-            vs.WaitForElement("Dev Container", TimeSpan.FromMinutes(6), "the 'Dev Container' launch profile in the toolbar");
+            // Only a progress signal: the toolbar's naming differs between Visual Studio versions, and the steps below
+            // check the outcome themselves.
+            vs.WaitForElement("Dev Container", TimeSpan.FromMinutes(3), "the 'Dev Container' launch profile in the toolbar");
             vs.Screenshot("01-solution-loaded");
 
             // 2. Extensions > Dev Containers > Open in Container builds and starts the container.
