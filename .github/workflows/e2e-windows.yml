@@ -91,15 +91,26 @@ jobs:
         shell: pwsh
         run: |
           $vsix = Get-ChildItem src/DevContainers.VisualStudio/bin/Release -Recurse -Filter *.vsix | Select-Object -First 1
-          $devenv = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -version '[18.0,)' -property productPath
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $devenv = & $vswhere -latest -prerelease -version '[18.0,)' -property productPath
+          $instance = & $vswhere -latest -prerelease -version '[18.0,)' -property instanceId
           $installer = Join-Path (Split-Path $devenv) 'VSIXInstaller.exe'
-          "Installing $($vsix.FullName) with $installer"
-          # VSIXInstaller writes its log, under the given file name, to %TEMP%.
-          $p = Start-Process $installer -ArgumentList '/quiet', '/logFile:vsixinstaller.log', "`"$($vsix.FullName)`"" -Wait -PassThru
+          "Installing $($vsix.FullName) into instance $instance"
+          # Out-of-process (VisualStudio.Extensibility) extensions are installed by the Visual Studio Installer, which
+          # needs the instance named when the machine has several. VSIXInstaller hands over to setup.exe and exits,
+          # so wait for the installer too. VSIXInstaller writes its log, under the given file name, to %TEMP%.
+          $p = Start-Process $installer -ArgumentList '/quiet', "/instanceIds:$instance", '/logFile:vsixinstaller.log', "`"$($vsix.FullName)`"" -Wait -PassThru
           "VSIXInstaller exit code: $($p.ExitCode)"
-          $logs = Get-ChildItem $env:TEMP -Filter '*VSIXInstaller*' -ErrorAction SilentlyContinue
-          $logs | Copy-Item -Destination $env:ARTIFACTS
-          if ($p.ExitCode -ne 0) { $logs | ForEach-Object { "--- $($_.Name)"; Get-Content $_.FullName -Tail 80 }; throw 'The extension could not be installed.' }
+          $deadline = (Get-Date).AddMinutes(20)
+          while ((Get-Process setup, vs_installer, vs_installershell -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep 5 }
+          Get-ChildItem $env:TEMP -Filter '*VSIXInstaller*' -ErrorAction SilentlyContinue | Copy-Item -Destination $env:ARTIFACTS
+          Get-ChildItem $env:TEMP -Filter 'dd_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 6 | Copy-Item -Destination $env:ARTIFACTS
+          $installed = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\VisualStudio", (Split-Path $devenv) -Filter DevContainers.VisualStudio.dll -Recurse -Depth 6 -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $installed) {
+            Get-ChildItem "$env:ARTIFACTS" -Filter '*.log' | ForEach-Object { "--- $($_.Name)"; Get-Content $_.FullName -Tail 40 }
+            throw 'The extension could not be installed.'
+          }
+          "Installed at $($installed.DirectoryName)"
 
       - name: Drive Visual Studio
         env:
