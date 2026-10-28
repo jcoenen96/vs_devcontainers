@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Regex = System.Text.RegularExpressions.Regex;
+using RegexOptions = System.Text.RegularExpressions.RegexOptions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Capturing;
 using FlaUI.Core.Definitions;
@@ -12,15 +14,12 @@ namespace DevContainers.VisualStudio.UITests;
 /// </summary>
 internal sealed class VisualStudioDriver : IDisposable
 {
-    // Buttons of the dialogs a never-used Visual Studio shows before the IDE (sign in, theme, what's new).
-    private static readonly string[] FirstRunButtons =
-    [
-        "Skip and add accounts later",
-        "Skip this for now",
-        "Not now, maybe later.",
-        "Not now, maybe later",
-        "Start Visual Studio",
-    ];
+    // Links and buttons of the dialogs a never-used Visual Studio shows before the IDE (sign in, theme, what's new).
+    private static readonly Regex FirstRunChoice = new(
+        @"^(skip|not now|maybe later|continue without|start visual studio)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private readonly Dictionary<IntPtr, DateTime> dialogsSeen = [];
 
     private readonly UIA3Automation automation = new();
     private readonly Process process;
@@ -193,31 +192,53 @@ internal sealed class VisualStudioDriver : IDisposable
         }
     }
 
-    /// <summary>Presses the "skip" buttons of first-run dialogs (sign in, theme), if one is showing.</summary>
+    /// <summary>
+    /// Gets past the first-run dialogs (sign in, theme): presses their "skip" or "not now" choice, and closes one
+    /// that has no such choice after a minute. Only dialogs shown before the IDE window are ever closed, so the
+    /// extension's own prompts are left alone.
+    /// </summary>
     public void DismissKnownDialogs()
     {
         foreach (var window in this.Windows())
         {
-            foreach (var name in FirstRunButtons)
+            if (TryFind(() => window.FindFirstDescendant(cf => cf.ByControlType(ControlType.MenuBar))) is not null)
             {
-                var button = TryFind(() => window.FindFirstDescendant(cf => cf.ByName(name)));
-                if (button is null)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                this.log($"Dismissing '{window.Title}' with '{name}'.");
+            var handle = window.Properties.NativeWindowHandle.ValueOrDefault;
+            var elements = TryFindAll(() => window.FindAllDescendants());
+            if (!this.dialogsSeen.ContainsKey(handle))
+            {
+                this.dialogsSeen[handle] = DateTime.UtcNow;
+                this.log($"Dialog '{window.Title}': " + string.Join(" | ", elements
+                    .Select(e => (Type: e.Properties.ControlType.ValueOrDefault, Name: e.Properties.Name.ValueOrDefault))
+                    .Where(e => !string.IsNullOrWhiteSpace(e.Name))
+                    .Select(e => $"{e.Type} '{e.Name}'")
+                    .Take(60)));
+                this.Screenshot($"dialog-{this.dialogsSeen.Count:00}");
+            }
+
+            var choice = elements.FirstOrDefault(e => e.Properties.Name.ValueOrDefault is { } name && FirstRunChoice.IsMatch(name.Trim()));
+            if (choice is not null)
+            {
+                this.Press(choice, $"'{window.Title}': '{choice.Properties.Name.ValueOrDefault}'");
+                continue;
+            }
+
+            if (this.mainWindow is null && DateTime.UtcNow - this.dialogsSeen[handle] > TimeSpan.FromMinutes(1))
+            {
+                this.log($"Closing '{window.Title}', which has no skip choice.");
                 try
                 {
-                    button.Click();
+                    window.Close();
                 }
                 catch (Exception ex)
                 {
-                    this.log($"Could not press '{name}': {ex.Message}");
+                    this.log($"Could not close '{window.Title}': {ex.Message}");
                 }
 
                 Thread.Sleep(2000);
-                break;
             }
         }
     }
@@ -248,6 +269,11 @@ internal sealed class VisualStudioDriver : IDisposable
     /// <summary>Shows the Output window and saves a screenshot and, when UI Automation exposes it, its text.</summary>
     public void SaveOutputPane()
     {
+        if (this.mainWindow is null)
+        {
+            return;
+        }
+
         try
         {
             this.ClickMenu("View", "Output");
@@ -289,6 +315,28 @@ internal sealed class VisualStudioDriver : IDisposable
 
         this.process.Dispose();
         this.automation.Dispose();
+    }
+
+    private void Press(AutomationElement element, string what)
+    {
+        this.log($"Pressing {what}.");
+        try
+        {
+            if (element.Patterns.Invoke.TryGetPattern(out var invoke))
+            {
+                invoke.Invoke();
+            }
+            else
+            {
+                element.Click();
+            }
+        }
+        catch (Exception ex)
+        {
+            this.log($"Could not press {what}: {ex.Message}");
+        }
+
+        Thread.Sleep(2000);
     }
 
     private AutomationElement? FindMenuItem(AutomationElement parent, string name)
