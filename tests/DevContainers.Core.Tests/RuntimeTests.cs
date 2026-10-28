@@ -66,7 +66,7 @@ public class RuntimeTests
         var runner = new FakeProcessRunner(spec => string.Join(' ', spec.Arguments) switch
         {
             var a when a.StartsWith("ps --all --filter label=devcontainer.local_folder", StringComparison.Ordinal) => FakeProcessRunner.Ok("app1\trunning\n"),
-            var a when a.StartsWith("inspect", StringComparison.Ordinal) => FakeProcessRunner.Ok("myproj\n"),
+            var a when a.StartsWith("inspect", StringComparison.Ordinal) => FakeProcessRunner.Ok("/src\t/src/.devcontainer/devcontainer.json\tmyproj\n"),
             var a when a.StartsWith("ps --all --filter label=com.docker.compose.project=myproj", StringComparison.Ordinal) => FakeProcessRunner.Ok("app1\trunning\ndb1\trunning\nold\texited\n"),
             _ => FakeProcessRunner.Ok(),
         });

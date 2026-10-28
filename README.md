@@ -21,7 +21,9 @@ inside it.
 Containers are created by the official [`@devcontainers/cli`](https://github.com/devcontainers/cli), the reference
 implementation of the spec. That gives images, Dockerfiles, Docker Compose, features, lifecycle hooks and
 variable substitution without reimplementing them, and containers stay compatible with the ones VS Code creates
-for the same folder. [docs/devcontainer-cli-integration.md](docs/devcontainer-cli-integration.md) explains how the
+for the same folder. Visual Studio and VS Code share that one container: Visual Studio reuses the container VS Code
+created (and the other way round), and stopping the app never stops the container.
+[docs/devcontainer-cli-integration.md](docs/devcontainer-cli-integration.md) explains how the
 extension drives the CLI.
 
 ```
@@ -49,12 +51,12 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 
 | Command | What it does |
 | --- | --- |
-| Open in Container | Builds the container if needed and starts it. Asks which config to use when there are several. |
+| Open in Container | Starts the folder's container, reusing the one VS Code uses if there is one, and builds it only when there is none. Asks which config to use when there are several. |
 | Open Container Terminal | Opens a shell inside the running container, with the container's `remoteEnv` and user. |
 | Add Run Profile for Dev Container | Adds a **Dev Container** launch profile to a project, so the Run button builds and runs it inside the container. See [docs/run-in-dev-container.md](docs/run-in-dev-container.md). |
-| Rebuild Container | Removes the container and creates it again from the current config. |
+| Rebuild Container | Removes the container and creates it again from the current config. Asks first when VS Code has it open. |
 | Rebuild Container Without Cache | The same, building the image with `--no-cache`. |
-| Stop Container | Stops the container, and every service of a Compose based container. |
+| Stop Container | Stops the container, and every service of a Compose based container. Asks first when VS Code has it open. |
 
 The full log is in the **Dev Containers** pane of the Output window.
 

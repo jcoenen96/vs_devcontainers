@@ -50,6 +50,12 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
             return;
         }
 
+        if (rebuild && !await this.ConfirmVsCodeDisconnectAsync(session, settings, "Rebuilding", cancellationToken))
+        {
+            log("Rebuild cancelled: the container is open in VS Code.");
+            return;
+        }
+
         using var progress = await extensibility.Shell().StartProgressReportingAsync(
             $"{verb} dev container",
             new ProgressReporterOptions(isWorkCancellable: true),
@@ -102,7 +108,14 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         log($"Stopping dev container for {session.ConfigFile.WorkspaceFolder}");
         try
         {
-            await session.StopAsync(await this.ReadSettingsAsync(cancellationToken), log, cancellationToken);
+            var settings = await this.ReadSettingsAsync(cancellationToken);
+            if (!await this.ConfirmVsCodeDisconnectAsync(session, settings, "Stopping", cancellationToken))
+            {
+                log("Stop cancelled: the container is open in VS Code.");
+                return;
+            }
+
+            await session.StopAsync(settings, log, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -222,6 +235,29 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
     {
         this.output?.Dispose();
         this.outputGate.Dispose();
+    }
+
+    /// <summary>
+    /// Visual Studio and VS Code share one container per folder. Stopping or rebuilding it disconnects a VS Code
+    /// window that has it open, so ask first.
+    /// </summary>
+    private async Task<bool> ConfirmVsCodeDisconnectAsync(DevContainerSession session, DevContainerSettings settings, string action, CancellationToken cancellationToken)
+    {
+        bool openInVsCode;
+        try
+        {
+            openInVsCode = await session.IsOpenInVsCodeAsync(settings, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The check is a courtesy; the operation itself reports a missing engine properly.
+            return true;
+        }
+
+        return !openInVsCode || await extensibility.Shell().ShowPromptAsync(
+            $"VS Code has this dev container open.\n\n{action} the container disconnects VS Code too. Continue?",
+            PromptOptions.OKCancel,
+            cancellationToken);
     }
 
     private async Task<DevContainerConfigFile?> ResolveConfigAsync(CancellationToken cancellationToken)

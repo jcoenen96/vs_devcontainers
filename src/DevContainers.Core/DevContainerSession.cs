@@ -39,6 +39,9 @@ public sealed class DevContainerSession(
     /// <summary>Set while the container is running.</summary>
     public UpResult? Container { get; private set; }
 
+    /// <summary>The labels of the container in use, which may have been written by VS Code.</summary>
+    public DevContainerIdentity? Identity { get; private set; }
+
     public string? LastError { get; private set; }
 
     /// <summary>Builds (if needed) and starts the dev container.</summary>
@@ -78,6 +81,24 @@ public sealed class DevContainerSession(
         }
     }
 
+    /// <summary>
+    /// Whether a VS Code window has this workspace's container open. Stopping or rebuilding the container then
+    /// disconnects that window, so callers should ask first.
+    /// </summary>
+    public async Task<bool> IsOpenInVsCodeAsync(DevContainerSettings settings, CancellationToken cancellationToken)
+    {
+        var engine = new ContainerEngineClient(await this.GetRuntimeAsync(settings, cancellationToken).ConfigureAwait(false), this.runner);
+        foreach (var container in await engine.FindDevContainersAsync(this.ConfigFile.WorkspaceFolder, this.ConfigFile.ConfigPath, cancellationToken).ConfigureAwait(false))
+        {
+            if (container.IsRunning && await engine.IsVsCodeAttachedAsync(container.Id, cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>The command line for an interactive login shell in the running container.</summary>
     public ProcessSpec CreateShellSpec(DevContainerSettings settings)
     {
@@ -90,7 +111,8 @@ public sealed class DevContainerSession(
         return cli.CreateExecSpec(
             this.ConfigFile.WorkspaceFolder,
             this.ConfigFile.ConfigPath,
-            ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"]);
+            ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"],
+            this.Identity);
     }
 
     private async Task<UpResult> UpAsync(DevContainerSettings settings, UpOptions options, Action<string> log, CancellationToken cancellationToken)
@@ -102,9 +124,21 @@ public sealed class DevContainerSession(
             var runtime = await this.GetRuntimeAsync(settings, cancellationToken).ConfigureAwait(false);
             log($"Using {runtime.Kind} {runtime.ServerVersion} ({runtime.ExecutablePath}).");
 
-            var cli = new DevContainerCli(this.cliLocator.Locate(settings.CliPath), runtime, this.runner);
-            var result = await cli.UpAsync(options, log, cancellationToken).ConfigureAwait(false);
+            // Reuse the container VS Code (or an earlier run) created for this folder by passing its exact labels;
+            // the CLI would otherwise look for its own spelling of the path and create a second container.
+            var engine = new ContainerEngineClient(runtime, this.runner);
+            var existing = (await engine.FindDevContainersAsync(this.ConfigFile.WorkspaceFolder, this.ConfigFile.ConfigPath, cancellationToken).ConfigureAwait(false))
+                .FirstOrDefault(c => c.Identity is not null);
+            var identity = existing?.Identity ?? DevContainerIdentity.ForNewContainer(this.ConfigFile.WorkspaceFolder, this.ConfigFile.ConfigPath);
+            if (existing is not null && !options.RemoveExistingContainer)
+            {
+                log($"Reusing dev container {ShortId(existing.Id)} ({existing.State}).");
+            }
 
+            var cli = new DevContainerCli(this.cliLocator.Locate(settings.CliPath), runtime, this.runner);
+            var result = await cli.UpAsync(options with { Identity = identity }, log, cancellationToken).ConfigureAwait(false);
+
+            this.Identity = identity;
             this.Container = result;
             this.SetState(DevContainerState.Running);
             return result;
@@ -133,6 +167,8 @@ public sealed class DevContainerSession(
             .ConfigureAwait(false);
         return this.Runtime;
     }
+
+    private static string ShortId(string id) => id.Length > 12 ? id[..12] : id;
 
     private void Fail(Exception ex)
     {
