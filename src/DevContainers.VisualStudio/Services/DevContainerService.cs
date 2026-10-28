@@ -16,7 +16,7 @@ namespace DevContainers.VisualStudio.Services;
 /// <summary>
 /// Connects Visual Studio (solution, prompts, progress, Output window) to the dev container sessions in Core.
 /// </summary>
-internal sealed class DevContainerService(VisualStudioExtensibility extensibility) : IDisposable
+internal sealed class DevContainerService(VisualStudioExtensibility extensibility, PrerequisiteInstaller prerequisites) : IDisposable
 {
     private const string OutputName = "Dev Containers";
 
@@ -43,6 +43,11 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
 
         var verb = rebuild ? "Rebuilding" : "Opening";
         log($"{verb} dev container from {configFile.ConfigPath}");
+
+        if (!await prerequisites.EnsureAsync(settings.CliPath, log, cancellationToken))
+        {
+            return;
+        }
 
         using var progress = await extensibility.Shell().StartProgressReportingAsync(
             $"{verb} dev container",

@@ -30,6 +30,7 @@ internal sealed class DevContainersExtension : Extension
     protected override void InitializeServices(IServiceCollection serviceCollection)
     {
         base.InitializeServices(serviceCollection);
+        serviceCollection.AddSingleton<PrerequisiteInstaller>();
         serviceCollection.AddSingleton<DevContainerService>();
     }
 }

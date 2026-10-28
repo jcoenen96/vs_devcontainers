@@ -34,9 +34,12 @@ samples/dotnet-console           A small solution with a .devcontainer to try it
 
 ## Using it
 
-Requirements: Visual Studio 2026, Docker Desktop or Podman, Node.js 20+, and the CLI:
+Requirements: Visual Studio 2026, Docker Desktop or Podman, Node.js 20+, and the devcontainer CLI. The extension
+does not ship Node.js or the CLI. If they are missing when you open a container, it offers to install them for
+you (Node.js with winget, the CLI with npm):
 
 ```
+winget install --id OpenJS.NodeJS.LTS --exact --source winget
 npm install -g @devcontainers/cli
 ```
 
@@ -78,3 +81,4 @@ Docker and Podman.
 3. **C++ inner loop:** CMake builds and gdb debugging in the container, with container headers copied locally so
    IntelliSense matches.
 4. **Parity and Marketplace:** port forwarding, a `customizations.visualstudio` section, Marketplace packaging.
+   The CLI stays a separate install; the extension never bundles it.

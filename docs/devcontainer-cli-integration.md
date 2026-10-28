@@ -154,8 +154,36 @@ restarting Visual Studio.
 | Requirement | Why |
 | --- | --- |
 | Node.js 20+ | The CLI is a Node.js program. |
-| `npm install -g @devcontainers/cli` | The CLI itself. CI pins 0.90.0. |
+| `@devcontainers/cli` from npm | The CLI itself. CI pins 0.90.0. |
 | Docker Desktop or Podman, running | The CLI and the extension call the engine's CLI. |
+
+The extension does not ship the CLI or Node.js. It relies on the user's installation, so they stay up to date
+with the user's own tools.
+
+### Installing missing prerequisites
+
+Before a container is opened or rebuilt, `PrerequisiteInstaller` (extension) asks `PrerequisiteChecker` (Core)
+whether Node.js, the CLI and winget can be found. When something is missing, the user sees which tools are
+missing and the exact commands that would install them, with **Install now** and **Cancel**:
+
+```
+winget install --id OpenJS.NodeJS.LTS --exact --source winget --accept-source-agreements --accept-package-agreements
+npm install -g @devcontainers/cli
+```
+
+Node.js comes from winget. The CLI is published to npm only (there is no winget package for it), so it is
+installed with the npm that comes with Node.js. Only the missing steps are included.
+
+**Install now** runs the commands in a visible PowerShell window (`InstallPlan.ToPowerShellScript`, passed with
+`-EncodedCommand`), so the user sees the progress and any Windows permission prompt. The script reloads `PATH`
+from the registry after each step, because the window does not otherwise see the Node.js that winget just
+installed. Visual Studio waits for the window to close, checks again, and continues opening the container.
+
+Visual Studio keeps the `PATH` it was started with. To find tools installed afterwards without a restart,
+`ExecutableLocator` on Windows searches the process `PATH` plus the machine and user `PATH` from the registry.
+
+If winget itself is missing (no App Installer), the prompt explains how to install Node.js from nodejs.org and
+lists the commands to run by hand.
 
 Settings under **Tools > Options > Dev Containers**: container engine (Automatic, Docker or Podman), container
 engine path, and devcontainer CLI path (to `devcontainer.js`).
@@ -172,5 +200,5 @@ engine path, and devcontainer CLI path (to `devcontainer.js`).
 
 - Port forwarding (`forwardPorts`) is parsed but not applied yet.
 - `customizations.visualstudio` is read but no settings are defined for it yet.
-- The CLI is not bundled with the extension. Shipping it inside the VSIX (it is MIT licensed) is planned for
-  Marketplace packaging, so only Node.js would be needed.
+- The prerequisite check runs when a container is started from the Dev Containers menu. Starting the
+  application (F5) inside the container comes with step 2 of the plan and will run the same check.
