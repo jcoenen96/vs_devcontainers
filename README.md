@@ -30,6 +30,7 @@ src/DevContainers.VisualStudio   The extension (VisualStudio.Extensibility, out 
 tests/DevContainers.Core.Tests   Unit tests, plus a real-container integration test
 docs/                            How the extension works
 samples/dotnet-console           A small solution with a .devcontainer to try it on
+samples/dotnet-webapi            A Web API with a .devcontainer, to test reaching the app in the container from the host
 ```
 
 ## Using it
@@ -110,6 +111,9 @@ Containers > Uninstall** and restart Visual Studio.
 4. Follow the build in **View > Output**, "Show output from: Dev Containers". When the container is running,
    **Extensions > Dev Containers > Open Container Terminal** gives you a shell inside it. Try `dotnet run
    --project HelloContainer`: it prints the container's Linux version.
+5. To check that an app in the container is reachable from Windows, open `samples\dotnet-webapi\HelloApi.slnx` and
+   follow [its README](samples/dotnet-webapi/README.md): it runs a Web API on port 5080 in the container that you
+   call from the host.
 
 ### Debugging the extension
 

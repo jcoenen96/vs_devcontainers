@@ -1,0 +1,12 @@
+# Send these from Visual Studio on the host while the API runs in the container.
+@HelloApi_HostAddress = http://localhost:5080
+
+GET {{HelloApi_HostAddress}}/api/info
+Accept: application/json
+
+###
+
+GET {{HelloApi_HostAddress}}/api/echo/hello
+Accept: application/json
+
+###

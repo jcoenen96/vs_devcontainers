@@ -31,6 +31,11 @@ jobs:
           DEVCONTAINERS_INTEGRATION: "1"
           DEVCONTAINERS_RUNTIME: ${{ matrix.runtime }}
         run: dotnet test tests/DevContainers.Core.Tests/DevContainers.Core.Tests.csproj --logger "console;verbosity=normal"
+      - name: Build samples
+        if: matrix.runtime == 'docker'
+        run: |
+          dotnet build samples/dotnet-console/HelloContainer.slnx
+          dotnet build samples/dotnet-webapi/HelloApi.slnx
 
   vsix:
     name: Build VSIX
