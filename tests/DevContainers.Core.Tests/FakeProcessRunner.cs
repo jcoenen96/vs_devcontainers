@@ -37,7 +37,8 @@ internal sealed class TempFolder : IDisposable
 
     public string Write(string relativePath, string content = "{}")
     {
-        var full = System.IO.Path.Combine(this.Path, relativePath);
+        // GetFullPath turns the forward slashes in relativePath into backslashes on Windows.
+        var full = System.IO.Path.GetFullPath(System.IO.Path.Combine(this.Path, relativePath));
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
         File.WriteAllText(full, content);
         return full;
