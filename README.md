@@ -4,7 +4,13 @@ A Visual Studio 2026 extension that brings [Dev Containers](https://containers.d
 solution, and build, run and debug it inside the container described by its `devcontainer.json`, with Docker or
 Podman. VS Code and JetBrains IDEs already support dev containers; this fills the gap for Visual Studio.
 
-> Status: early prototype. Step 1 of the plan (below) is in place.
+> [!WARNING]
+> **Under development.** This project is an early prototype and not ready for production use. Features are
+> incomplete, behaviour may change between versions, and things may break. Step 1 of the plan (below) is in place.
+
+> [!NOTE]
+> **Vibe coded.** This project is currently written entirely with an AI coding assistant. The code has
+> automated tests but has not yet had a thorough human review. Read it before you rely on it.
 
 ## How it works
 
