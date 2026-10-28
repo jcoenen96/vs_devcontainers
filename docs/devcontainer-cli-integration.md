@@ -113,9 +113,11 @@ and the user's login environment applied:
 node devcontainer.js exec --workspace-folder <folder> --config <config> --docker-path <engine> <command...>
 ```
 
+The **Dev Container** launch profile uses `exec` to run `dotnet run` in the container when you press Run; see
+[run-in-dev-container.md](run-in-dev-container.md).
+
 **Open Container Terminal** uses this to start an interactive shell in a new console window, preferring bash:
-`/bin/sh -c "if command -v bash ...; then exec bash -l; else exec sh -l; fi"`. The next steps of the plan (build,
-run and debug) will use `exec` the same way.
+`/bin/sh -c "if command -v bash ...; then exec bash -l; else exec sh -l; fi"`.
 
 ## Stopping and removing
 

@@ -51,6 +51,7 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 | --- | --- |
 | Open in Container | Builds the container if needed and starts it. Asks which config to use when there are several. |
 | Open Container Terminal | Opens a shell inside the running container, with the container's `remoteEnv` and user. |
+| Add Run Profile for Dev Container | Adds a **Dev Container** launch profile to a project, so the Run button builds and runs it inside the container. See [docs/run-in-dev-container.md](docs/run-in-dev-container.md). |
 | Rebuild Container | Removes the container and creates it again from the current config. |
 | Rebuild Container Without Cache | The same, building the image with `--no-cache`. |
 | Stop Container | Stops the container, and every service of a Compose based container. |
@@ -111,9 +112,9 @@ Containers > Uninstall** and restart Visual Studio.
 4. Follow the build in **View > Output**, "Show output from: Dev Containers". When the container is running,
    **Extensions > Dev Containers > Open Container Terminal** gives you a shell inside it. Try `dotnet run
    --project HelloContainer`: it prints the container's Linux version.
-5. To check that an app in the container is reachable from Windows, open `samples\dotnet-webapi\HelloApi.slnx` and
-   follow [its README](samples/dotnet-webapi/README.md): it runs a Web API on port 5080 in the container that you
-   call from the host.
+5. Use the Run button: open `samples\dotnet-webapi\HelloApi.slnx`, keep the **Dev Container** profile selected and
+   press Ctrl+F5. The Web API builds and runs inside the container; open <http://localhost:5080/api/info> on
+   Windows to call it. [Its README](samples/dotnet-webapi/README.md) has the details.
 
 ### Debugging the extension
 
@@ -134,10 +135,10 @@ CI runs the tests against both Docker and Podman and builds the VSIX on every pu
 
 ## Plan
 
-1. **Foundation** (this): extension skeleton, devcontainer CLI engine, Docker and Podman, open, rebuild, stop,
+1. **Foundation** (done): extension skeleton, devcontainer CLI engine, Docker and Podman, open, rebuild, stop,
    terminal, output log.
-2. **.NET inner loop:** build, run and debug C# inside the container, with the debugger attached through
-   `docker exec` / `podman exec`.
+2. **.NET inner loop:** the Run button builds and runs the project inside the container through a launch profile
+   (done). Next: attach the debugger to the app in the container.
 3. **C++ inner loop:** CMake builds and gdb debugging in the container, with container headers copied locally so
    IntelliSense matches.
 4. **Parity and Marketplace:** port forwarding, a `customizations.visualstudio` section, Marketplace packaging.

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using DevContainers.Core;
 using DevContainers.Core.Configuration;
+using DevContainers.Core.Launch;
 using DevContainers.Core.Runtime;
 using DevContainers.VisualStudio.Settings;
 using Microsoft.VisualStudio.Extensibility;
@@ -139,6 +140,81 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         catch (Exception ex)
         {
             await this.ReportFailureAsync("The container terminal could not be opened.", ex.Message, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Adds the "Dev Container" launch profile and launcher script to a project, so the Run button starts it in the
+    /// dev container.
+    /// </summary>
+    public async Task AddLaunchProfileAsync(CancellationToken cancellationToken)
+    {
+        var configFile = await this.ResolveConfigAsync(cancellationToken);
+        if (configFile is null)
+        {
+            return;
+        }
+
+        var workspace = Path.GetFullPath(configFile.WorkspaceFolder) + Path.DirectorySeparatorChar;
+        var projects = await extensibility.Workspaces().QueryProjectsAsync(
+            project => project.With(p => p.Name).With(p => p.Path),
+            cancellationToken);
+        var candidates = projects
+            .Where(p => p.Path is { } path
+                && path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                && Path.GetFullPath(path).StartsWith(workspace, StringComparison.OrdinalIgnoreCase))
+            .Select(p => (Name: p.Name ?? Path.GetFileNameWithoutExtension(p.Path!), Path: p.Path!))
+            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            await extensibility.Shell().ShowPromptAsync(
+                $"No C# project of this solution is inside {configFile.WorkspaceFolder}, the folder the dev container mounts.",
+                PromptOptions.OK,
+                cancellationToken);
+            return;
+        }
+
+        var chosen = candidates[0];
+        if (candidates.Count > 1)
+        {
+            var choices = new ChoiceResultCollection<int>();
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                choices.Add(candidates[i].Name, i);
+            }
+
+            var index = await extensibility.Shell().ShowPromptAsync(
+                "Which project should the Run button start in the dev container?",
+                new PromptOptions<int>(choices, defaultChoiceIndex: 0, dismissedReturns: -1) { Title = "Dev Containers" },
+                cancellationToken);
+            if (index < 0)
+            {
+                return;
+            }
+
+            chosen = candidates[index];
+        }
+
+        var log = await this.GetLogAsync(cancellationToken);
+        try
+        {
+            var result = DevContainerLaunchProfile.Install(chosen.Path, configFile);
+            log($"Added the '{DevContainerLaunchProfile.ProfileName}' launch profile to {result.LaunchSettingsPath}" +
+                (result.InnerLaunchProfile is null ? "." : $", running the '{result.InnerLaunchProfile}' profile inside the container."));
+            log($"Wrote the launcher script {result.ScriptPath}.");
+
+            await extensibility.Shell().ShowPromptAsync(
+                $"{chosen.Name} now has a '{DevContainerLaunchProfile.ProfileName}' launch profile.\n\n" +
+                $"Pick '{DevContainerLaunchProfile.ProfileName}' in the list next to the Run button and start the project: it builds and runs inside the dev container.\n\n" +
+                "Commit Properties/launchSettings.json and .devcontainer/vs-run.ps1, so the profile works for everyone right after cloning.",
+                PromptOptions.OK,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
+        {
+            await this.ReportFailureAsync("The launch profile could not be added.", ex.Message, cancellationToken);
         }
     }
 

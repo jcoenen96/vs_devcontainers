@@ -26,18 +26,27 @@ Two things have to be right, and the sample sets both:
 
 ## Test it
 
-1. Open `samples\dotnet-webapi\HelloApi.slnx` in Visual Studio and choose **Extensions > Dev Containers > Open in
-   Container**. If you created this container before, choose **Rebuild Container** so the port is published.
-2. Start the API in the container.
-   - **From the container terminal** (works now): **Extensions > Dev Containers > Open Container Terminal**, then
-     `dotnet run --project HelloApi`. Wait for `Now listening on: http://0.0.0.0:5080`.
-   - **With F5 in the container** (once build, run and debug in the container is in place, step 2 of the plan):
-     pick the `http` profile and press F5.
-3. From Windows, open <http://localhost:5080/api/info> in a browser, or open `HelloApi\HelloApi.http` in Visual
-   Studio and choose **Send request**. You should see JSON with a Linux `os`, `inContainer: true` and the container's
-   `machineName`. With `curl.exe http://localhost:5080/api/info` from PowerShell you get the same.
-4. Under the debugger, `debuggerAttached` is `true`. Set a breakpoint in the `/api/info` handler in `Program.cs`
-   and send the request again from the host: the breakpoint is hit.
+1. Make sure Docker Desktop or Podman is running, and open `samples\dotnet-webapi\HelloApi.slnx` in Visual Studio.
+2. Check that **Dev Container** is selected in the list next to the Run button. It is the first profile in
+   `HelloApi\Properties\launchSettings.json`, so it is selected after a fresh clone.
+3. Start it with **Debug > Start Without Debugging** (Ctrl+F5). A console window opens and:
+   - offers to install Node.js and the devcontainer CLI if they are missing,
+   - builds and starts the dev container (the first time takes a few minutes),
+   - runs `dotnet run --project HelloApi --launch-profile http` inside the container.
+
+   Wait for `Now listening on: http://0.0.0.0:5080`.
+4. From Windows, open <http://localhost:5080/api/info> in a browser, or open `HelloApi\HelloApi.http` in Visual
+   Studio and choose **Send request**. You should see JSON with a Linux `os`, `inContainer: true` and the
+   container's `machineName`. `curl.exe http://localhost:5080/api/info` from PowerShell gives the same.
+5. Stop it from Visual Studio or close the window. The next run stops the previous app in the container first, so
+   the port is free again.
+
+To run on Windows instead, pick the **http** profile. [docs/run-in-dev-container.md](../../docs/run-in-dev-container.md)
+explains how the profile works.
+
+Breakpoints are not hit yet: the debugger is not attached to the app in the container (`debuggerAttached` stays
+`false`). That is the next part of step 2. Until then, the container terminal works too: **Extensions > Dev
+Containers > Open Container Terminal**, then `dotnet run --project HelloApi --launch-profile http`.
 
 ## When the host cannot reach it
 
