@@ -21,6 +21,9 @@ internal sealed class DevContainersExtension : Extension
 
             // Visual Studio 2026 (version 18) is the minimum supported version.
             InstallationTargetVersion = "[18.0,)",
+
+            // Visual Studio 2026 runs out-of-process extensions on .NET 10.
+            DotnetTargetVersions = ["net10.0"],
         },
     };
 

@@ -24,7 +24,7 @@ variable substitution without reimplementing them, and containers stay compatibl
 for the same folder.
 
 ```
-src/DevContainers.Core           Config discovery, Docker/Podman detection, devcontainer CLI wrapper (net8.0, no VS dependency)
+src/DevContainers.Core           Config discovery, Docker/Podman detection, devcontainer CLI wrapper (net10.0, no VS dependency)
 src/DevContainers.VisualStudio   The extension (VisualStudio.Extensibility, out of process)
 tests/DevContainers.Core.Tests   Unit tests, plus a real-container integration test
 samples/dotnet-console           A small solution with a .devcontainer to try it on
