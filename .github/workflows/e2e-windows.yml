@@ -92,20 +92,16 @@ jobs:
         run: |
           $vsix = Get-ChildItem src/DevContainers.VisualStudio/bin/Release -Recurse -Filter *.vsix | Select-Object -First 1
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $devenv = & $vswhere -latest -prerelease -version '[18.0,)' -property productPath
-          $instance = & $vswhere -latest -prerelease -version '[18.0,)' -property instanceId
-          $installer = Join-Path (Split-Path $devenv) 'VSIXInstaller.exe'
-          "Installing $($vsix.FullName) into instance $instance"
-          # Out-of-process (VisualStudio.Extensibility) extensions are installed by the Visual Studio Installer, which
-          # needs the instance named when the machine has several. VSIXInstaller hands over to setup.exe and exits,
-          # so wait for the installer too. VSIXInstaller writes its log, under the given file name, to %TEMP%.
-          $p = Start-Process $installer -ArgumentList '/quiet', "/instanceIds:$instance", '/logFile:vsixinstaller.log', "`"$($vsix.FullName)`"" -Wait -PassThru
-          "VSIXInstaller exit code: $($p.ExitCode)"
-          $deadline = (Get-Date).AddMinutes(20)
-          while ((Get-Process setup, vs_installer, vs_installershell -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep 5 }
+          $installPath = & $vswhere -latest -prerelease -version '[18.0,)' -property installationPath
+          "Installing $($vsix.FullName) into $installPath"
+          # Out-of-process (VisualStudio.Extensibility) extensions are installed by the Visual Studio Installer
+          # (VSIXInstaller hands them to it). In quiet mode it refuses unsigned extensions unless told otherwise.
+          $setup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $p = Start-Process $setup -ArgumentList 'modify', '--installPath', "`"$installPath`"", '--vsix', "`"$($vsix.FullName)`"", '--quiet', '--norestart', '--allowUnsignedExtensions' -Wait -PassThru
+          "Visual Studio Installer exit code: $($p.ExitCode)"
           Get-ChildItem $env:TEMP -Filter '*VSIXInstaller*' -ErrorAction SilentlyContinue | Copy-Item -Destination $env:ARTIFACTS
           Get-ChildItem $env:TEMP -Filter 'dd_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 6 | Copy-Item -Destination $env:ARTIFACTS
-          $installed = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\VisualStudio", (Split-Path $devenv) -Filter DevContainers.VisualStudio.dll -Recurse -Depth 6 -ErrorAction SilentlyContinue | Select-Object -First 1
+          $installed = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\VisualStudio", $installPath -Filter DevContainers.VisualStudio.dll -Recurse -Depth 6 -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $installed) {
             Get-ChildItem $env:TEMP -Filter 'dd_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 4 | ForEach-Object {
               "--- $($_.Name)"
