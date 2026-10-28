@@ -1,0 +1,19 @@
+{
+  "DevContainers.Menu.DisplayName": "Dev Containers",
+  "DevContainers.OpenInContainer.DisplayName": "Open in Container",
+  "DevContainers.OpenTerminal.DisplayName": "Open Container Terminal",
+  "DevContainers.Rebuild.DisplayName": "Rebuild Container",
+  "DevContainers.RebuildNoCache.DisplayName": "Rebuild Container Without Cache",
+  "DevContainers.Stop.DisplayName": "Stop Container",
+  "DevContainers.Settings.Category": "Dev Containers",
+  "DevContainers.Settings.Category.Description": "Settings for running solutions inside dev containers.",
+  "DevContainers.Settings.Runtime": "Container engine",
+  "DevContainers.Settings.Runtime.Auto": "Automatic (Docker, then Podman)",
+  "DevContainers.Settings.Runtime.Docker": "Docker",
+  "DevContainers.Settings.Runtime.Podman": "Podman",
+  "DevContainers.Settings.Runtime.Description": "Which container engine runs dev containers.",
+  "DevContainers.Settings.RuntimePath": "Container engine path",
+  "DevContainers.Settings.RuntimePath.Description": "Full path to docker.exe or podman.exe. Leave empty to use the one on PATH.",
+  "DevContainers.Settings.CliPath": "devcontainer CLI path",
+  "DevContainers.Settings.CliPath.Description": "Full path to devcontainer.js from @devcontainers/cli. Leave empty to find it on PATH or in the global npm folder."
+}
