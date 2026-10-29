@@ -97,7 +97,7 @@ The app runs inside the container, so two settings decide whether Windows can re
 - **No breakpoints yet.** The profile runs the app in the container, but the Visual Studio debugger is not
   attached to it. Use **Debug > Start Without Debugging** (Ctrl+F5). Debugging inside the container is the next
   part of step 2.
-- **.NET projects only.** The script runs `dotnet run`. C++ comes with step 3 of the plan.
+- **.NET projects only.** The script runs `dotnet run`. TypeScript apps come with step 3 of the plan.
 - **Ports from `forwardPorts` are not forwarded yet**; use `appPort`.
 
 ## Tested

@@ -4,6 +4,9 @@ A Visual Studio 2026 extension that brings [Dev Containers](https://containers.d
 solution, and build, run and debug it inside the container described by its `devcontainer.json`, with Docker or
 Podman. VS Code and JetBrains IDEs already support dev containers; this fills the gap for Visual Studio.
 
+It targets **.NET and TypeScript** applications. C++ is out of scope: Visual Studio already supports C++ in Linux
+containers natively.
+
 > [!WARNING]
 > **Under development.** This project is an early prototype and not ready for production use. Features are
 > incomplete, behaviour may change between versions, and things may break. Step 1 of the plan (below) is in place.
@@ -142,7 +145,7 @@ CI runs the tests against both Docker and Podman and builds the VSIX on every pu
    terminal, output log.
 2. **.NET inner loop:** the Run button builds and runs the project inside the container through a launch profile
    (done). Next: attach the debugger to the app in the container.
-3. **C++ inner loop:** CMake builds and gdb debugging in the container, with container headers copied locally so
-   IntelliSense matches.
+3. **TypeScript inner loop:** run TypeScript and Node.js apps (their npm scripts) inside the container from the Run
+   button, and attach Visual Studio's JavaScript debugger to them.
 4. **Parity and Marketplace:** port forwarding, a `customizations.visualstudio` section, Marketplace packaging.
    The CLI stays a separate install; the extension never bundles it.
