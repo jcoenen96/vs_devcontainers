@@ -224,7 +224,11 @@ $pidFile = '/tmp/vs-run-' + (($relativeProject -replace '[^A-Za-z0-9_.-]', '_').
 $stopPrevious = "if [ -f $pidFile ]; then kill -TERM -`$(cat $pidFile) 2>/dev/null && sleep 1; rm -f $pidFile; fi; true"
 Invoke-DevContainer (@('exec') + $common + @('sh', '-c', $stopPrevious)) | Out-Null
 
-$run = "dotnet run --project '$relativeProject'"
+# Build into the container's own file system, not obj/ and bin/ in the mounted folder: Windows bind mounts (Podman and
+# Docker through WSL) do not let the container user set file times there, which fails the build (MSB3374), and
+# Visual Studio's own builds on the host use those folders too. (No quotes: Windows PowerShell passes them on
+# unescaped.)
+$run = "dotnet run --project '$relativeProject' --property:UseArtifactsOutput=true --property:ArtifactsPath=`$HOME/.vs-devcontainer/build"
 $run += if ($LaunchProfile) { " --launch-profile '$LaunchProfile'" } else { ' --no-launch-profile' }
 if ($AppArgs.Count -gt 0) { $run += ' -- ' + (($AppArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' ') }
 

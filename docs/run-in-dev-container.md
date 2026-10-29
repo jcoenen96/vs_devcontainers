@@ -64,7 +64,10 @@ Windows) and PowerShell 7.
    `/tmp/vs-run-<project>.pid` inside the container; the next run stops that group first.
 5. **Run the project** inside the container with `devcontainer exec`, as the container's user and with its
    environment: `dotnet run --project <project> --launch-profile <profile>`. The output shows in the window, and
-   the window's exit code is the app's.
+   the window's exit code is the app's. The build output goes to `~/.vs-devcontainer/build` inside the container
+   (MSBuild's artifacts output), not to `obj/` and `bin/` in your folder: Windows bind mounts (Podman, and Docker
+   through WSL) do not let the container's user set file times there, which fails the build with MSB3374, and the
+   host's Visual Studio builds use those folders too.
 
 ## Stopping the app keeps the container
 
