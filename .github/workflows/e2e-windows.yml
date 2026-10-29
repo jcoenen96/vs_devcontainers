@@ -130,6 +130,9 @@ jobs:
           '--- launcher output'; Get-Content $out
           '--- launcher errors'; Get-Content $err
           if (-not $p.HasExited) { taskkill /T /F /PID $p.Id | Out-Null }
+          # The app keeps running in the container after its window closes (by design); stop the container so the
+          # Visual Studio test below starts from scratch and its own run is what answers.
+          podman ps -q | ForEach-Object { podman stop $_ | Out-Null }
           "GET /api/info: $info"
           if ($info -notmatch '"inContainer":true') { throw 'The launcher did not start the sample API in the container.' }
 

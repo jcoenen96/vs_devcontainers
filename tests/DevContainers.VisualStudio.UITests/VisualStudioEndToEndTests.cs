@@ -58,6 +58,8 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             Assert.True(container.IsRunning, $"Container {container.Id} is {container.State}.");
 
             // 3. Debug > Start Without Debugging runs the app inside the container; the host reaches it on port 5080.
+            // Nothing answers before that, so the answer below comes from this run.
+            Assert.False(await IsApiAnsweringAsync(), "Something already answers on port 5080 before the run.");
             var runStarted = DateTime.Now;
             vs.LogDebugTarget();
             vs.ClickMenu("Debug", "Start Without Debugging");
@@ -125,6 +127,19 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             "http://localhost:5080/api/info to answer",
             vs);
         return body!;
+    }
+
+    private static async Task<bool> IsApiAnsweringAsync()
+    {
+        try
+        {
+            await Http.GetStringAsync("http://localhost:5080/api/info");
+            return true;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return false;
+        }
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout, string what, VisualStudioDriver vs)
