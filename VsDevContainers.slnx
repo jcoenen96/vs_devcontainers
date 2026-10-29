@@ -5,5 +5,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/DevContainers.Core.Tests/DevContainers.Core.Tests.csproj" />
+    <Project Path="tests/DevContainers.VisualStudio.UITests/DevContainers.VisualStudio.UITests.csproj" />
   </Folder>
 </Solution>

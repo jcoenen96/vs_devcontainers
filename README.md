@@ -4,6 +4,9 @@ A Visual Studio 2026 extension that brings [Dev Containers](https://containers.d
 solution, and build, run and debug it inside the container described by its `devcontainer.json`, with Docker or
 Podman. VS Code and JetBrains IDEs already support dev containers; this fills the gap for Visual Studio.
 
+It targets **.NET and TypeScript** applications. C++ is out of scope: Visual Studio already supports C++ in Linux
+containers natively.
+
 > [!WARNING]
 > **Under development.** This project is an early prototype and not ready for production use. Features are
 > incomplete, behaviour may change between versions, and things may break. Step 1 of the plan (below) is in place.
@@ -21,13 +24,16 @@ inside it.
 Containers are created by the official [`@devcontainers/cli`](https://github.com/devcontainers/cli), the reference
 implementation of the spec. That gives images, Dockerfiles, Docker Compose, features, lifecycle hooks and
 variable substitution without reimplementing them, and containers stay compatible with the ones VS Code creates
-for the same folder. [docs/devcontainer-cli-integration.md](docs/devcontainer-cli-integration.md) explains how the
+for the same folder. Visual Studio and VS Code share that one container: Visual Studio reuses the container VS Code
+created (and the other way round), and stopping the app never stops the container.
+[docs/devcontainer-cli-integration.md](docs/devcontainer-cli-integration.md) explains how the
 extension drives the CLI.
 
 ```
 src/DevContainers.Core           Config discovery, Docker/Podman detection, devcontainer CLI wrapper (net10.0, no VS dependency)
 src/DevContainers.VisualStudio   The extension (VisualStudio.Extensibility, out of process)
 tests/DevContainers.Core.Tests   Unit tests, plus a real-container integration test
+tests/DevContainers.VisualStudio.UITests   Drives a real Visual Studio end to end (docs/end-to-end-tests.md)
 docs/                            How the extension works
 samples/dotnet-console           A small solution with a .devcontainer to try it on
 samples/dotnet-webapi            A Web API with a .devcontainer, to test reaching the app in the container from the host
@@ -49,11 +55,12 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 
 | Command | What it does |
 | --- | --- |
-| Open in Container | Builds the container if needed and starts it. Asks which config to use when there are several. |
+| Open in Container | Starts the folder's container, reusing the one VS Code uses if there is one, and builds it only when there is none. Asks which config to use when there are several. |
 | Open Container Terminal | Opens a shell inside the running container, with the container's `remoteEnv` and user. |
-| Rebuild Container | Removes the container and creates it again from the current config. |
+| Add Run Profile for Dev Container | Adds a **Dev Container** launch profile to a project, so the Run button builds and runs it inside the container. See [docs/run-in-dev-container.md](docs/run-in-dev-container.md). |
+| Rebuild Container | Removes the container and creates it again from the current config. Asks first when VS Code has it open. |
 | Rebuild Container Without Cache | The same, building the image with `--no-cache`. |
-| Stop Container | Stops the container, and every service of a Compose based container. |
+| Stop Container | Stops the container, and every service of a Compose based container. Asks first when VS Code has it open. |
 
 The full log is in the **Dev Containers** pane of the Output window.
 
@@ -111,9 +118,9 @@ Containers > Uninstall** and restart Visual Studio.
 4. Follow the build in **View > Output**, "Show output from: Dev Containers". When the container is running,
    **Extensions > Dev Containers > Open Container Terminal** gives you a shell inside it. Try `dotnet run
    --project HelloContainer`: it prints the container's Linux version.
-5. To check that an app in the container is reachable from Windows, open `samples\dotnet-webapi\HelloApi.slnx` and
-   follow [its README](samples/dotnet-webapi/README.md): it runs a Web API on port 5080 in the container that you
-   call from the host.
+5. Use the Run button: open `samples\dotnet-webapi\HelloApi.slnx`, keep the **Dev Container** profile selected and
+   press Ctrl+F5. The Web API builds and runs inside the container; open <http://localhost:5080/api/info> on
+   Windows to call it. [Its README](samples/dotnet-webapi/README.md) has the details.
 
 ### Debugging the extension
 
@@ -134,11 +141,11 @@ CI runs the tests against both Docker and Podman and builds the VSIX on every pu
 
 ## Plan
 
-1. **Foundation** (this): extension skeleton, devcontainer CLI engine, Docker and Podman, open, rebuild, stop,
+1. **Foundation** (done): extension skeleton, devcontainer CLI engine, Docker and Podman, open, rebuild, stop,
    terminal, output log.
-2. **.NET inner loop:** build, run and debug C# inside the container, with the debugger attached through
-   `docker exec` / `podman exec`.
-3. **C++ inner loop:** CMake builds and gdb debugging in the container, with container headers copied locally so
-   IntelliSense matches.
+2. **.NET inner loop:** the Run button builds and runs the project inside the container through a launch profile
+   (done). Next: attach the debugger to the app in the container.
+3. **TypeScript inner loop:** run TypeScript and Node.js apps (their npm scripts) inside the container from the Run
+   button, and attach Visual Studio's JavaScript debugger to them.
 4. **Parity and Marketplace:** port forwarding, a `customizations.visualstudio` section, Marketplace packaging.
    The CLI stays a separate install; the extension never bundles it.

@@ -1,0 +1,158 @@
+name: End-to-end (Visual Studio on Windows)
+
+# Installs the extension into a real Visual Studio 2026 on a Windows runner, starts Podman (Linux containers through
+# WSL2), and drives Visual Studio through UI Automation: open the sample Web API, Open in Container, Start Without
+# Debugging, call the API from Windows, stop the app and the container.
+# See docs/end-to-end-tests.md.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Visual Studio + Podman
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    env:
+      ARTIFACTS: ${{ github.workspace }}\e2e-artifacts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the machine
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force $env:ARTIFACTS | Out-Null
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -version '[18.0,)' -format json | ConvertFrom-Json
+          "Visual Studio: $($vs.displayName) $($vs.catalog.productDisplayVersion) at $($vs.installationPath)"
+          if (-not $vs) { throw 'Visual Studio 2026 is not installed on this runner.' }
+          wsl --version
+          wsl --status
+          docker version --format '{{.Server.Version}} {{.Server.Os}}'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: '[18.0,)'
+
+      - name: Build the extension and the UI test
+        run: msbuild VsDevContainers.slnx /restore /p:Configuration=Release /v:minimal
+
+      - name: Install the devcontainer CLI
+        run: npm install -g @devcontainers/cli@0.90.0
+
+      - name: Install Podman
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = gh release view --repo containers/podman --json assets -q '.assets[].name'
+          $asset = @($assets | Where-Object { $_ -match 'windows.*amd64.*\.msi$' }) + @($assets | Where-Object { $_ -match 'windows.*amd64.*\.exe$' }) | Select-Object -First 1
+          if (-not $asset) { throw "No Podman Windows installer in the latest release: $($assets -join ', ')" }
+          gh release download --repo containers/podman --pattern $asset --dir $env:RUNNER_TEMP
+          $file = Join-Path $env:RUNNER_TEMP $asset
+          "Installing $asset"
+          if ($asset.EndsWith('.msi')) {
+            $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$file`"", '/qn', '/norestart', '/l*v', "`"$env:ARTIFACTS\podman-install.log`"" -Wait -PassThru
+          } else {
+            $p = Start-Process $file -ArgumentList '/install', '/quiet', '/norestart', '/log', "`"$env:ARTIFACTS\podman-install.log`"" -Wait -PassThru
+          }
+          "Installer exit code: $($p.ExitCode)"
+          # The MSI installs per machine or per user depending on its version; look in both places.
+          $podman = Get-ChildItem "$env:ProgramFiles", "$env:LOCALAPPDATA\Programs" -Filter podman.exe -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $podman) {
+            Select-String -Path "$env:ARTIFACTS\podman-install.log" -Pattern 'INSTALLFOLDER|INSTALLDIR|ALLUSERS|Return value 3|error' | Select-Object -First 40 | ForEach-Object { $_.Line }
+            throw 'podman.exe was not installed.'
+          }
+          "Podman is at $($podman.FullName)"
+          $podman.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Start the Podman machine (WSL2)
+        shell: pwsh
+        run: |
+          podman --version
+          podman machine init --now --cpus 2 --memory 6144
+          if ($LASTEXITCODE -ne 0) { throw 'podman machine init failed. GitHub-hosted runners do not officially support nested virtualization (WSL2).' }
+          podman version
+          podman run --rm docker.io/library/alpine:3.20 uname -a
+
+      - name: Pull the sample's dev container image
+        run: podman pull mcr.microsoft.com/devcontainers/dotnet:10.0
+
+      - name: Install the extension into Visual Studio
+        shell: pwsh
+        run: |
+          $vsix = Get-ChildItem src/DevContainers.VisualStudio/bin/Release -Recurse -Filter *.vsix | Select-Object -First 1
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -prerelease -version '[18.0,)' -property installationPath
+          "Installing $($vsix.FullName) into $installPath"
+          # Out-of-process (VisualStudio.Extensibility) extensions are installed by the Visual Studio Installer
+          # (VSIXInstaller hands them to it). In quiet mode it refuses unsigned extensions unless told otherwise.
+          $setup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $p = Start-Process $setup -ArgumentList 'modify', '--installPath', "`"$installPath`"", '--vsix', "`"$($vsix.FullName)`"", '--quiet', '--norestart', '--allowUnsignedExtensions' -Wait -PassThru
+          "Visual Studio Installer exit code: $($p.ExitCode)"
+          Get-ChildItem $env:TEMP -Filter '*VSIXInstaller*' -ErrorAction SilentlyContinue | Copy-Item -Destination $env:ARTIFACTS
+          Get-ChildItem $env:TEMP -Filter 'dd_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 6 | Copy-Item -Destination $env:ARTIFACTS
+          $installed = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\VisualStudio", $installPath -Filter DevContainers.VisualStudio.dll -Recurse -Depth 6 -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $installed) {
+            Get-ChildItem $env:TEMP -Filter 'dd_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 4 | ForEach-Object {
+              "--- $($_.Name)"
+              Select-String -Path $_.FullName -Pattern 'error|fail|warn|vsix|DevContainers|extension|elevat' | Select-Object -Last 40 | ForEach-Object { $_.Line }
+            }
+            Get-Process | Where-Object { $_.Path -like '*Microsoft Visual Studio*' } | Format-Table Name, Id, Path -AutoSize
+            throw 'The extension could not be installed.'
+          }
+          "Installed at $($installed.DirectoryName)"
+
+      - name: Run the launcher with Windows PowerShell
+        # The Dev Container launch profile's script on its own, with its output in this log: Windows PowerShell 5.1,
+        # Windows paths, Podman. Visual Studio runs the same command line.
+        shell: pwsh
+        working-directory: samples/dotnet-webapi/HelloApi
+        run: |
+          $out = Join-Path $env:ARTIFACTS 'launcher-out.txt'
+          $err = Join-Path $env:ARTIFACTS 'launcher-err.txt'
+          $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '..\.devcontainer\vs-run.ps1', '-LaunchProfile', 'http' -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+          $info = $null
+          $deadline = (Get-Date).AddMinutes(8)
+          while (-not $info -and -not $p.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep 5
+            try { $info = (Invoke-WebRequest http://localhost:5080/api/info -UseBasicParsing -TimeoutSec 5).Content } catch { }
+          }
+          '--- launcher output'; Get-Content $out
+          '--- launcher errors'; Get-Content $err
+          if (-not $p.HasExited) { taskkill /T /F /PID $p.Id | Out-Null }
+          # The app keeps running in the container after its window closes (by design); stop the container so the
+          # Visual Studio test below starts from scratch and its own run is what answers.
+          podman ps -q | ForEach-Object { podman stop $_ | Out-Null }
+          "GET /api/info: $info"
+          if ($info -notmatch '"inContainer":true') { throw 'The launcher did not start the sample API in the container.' }
+
+      - name: Drive Visual Studio
+        if: success() || failure()
+        env:
+          DEVCONTAINERS_UITEST: "1"
+          DEVCONTAINERS_UITEST_ARTIFACTS: ${{ env.ARTIFACTS }}
+        run: dotnet test tests/DevContainers.VisualStudio.UITests/DevContainers.VisualStudio.UITests.csproj -c Release --no-build --logger "console;verbosity=detailed"
+
+      - name: Collect logs
+        if: always()
+        shell: pwsh
+        run: |
+          podman ps -a 2>&1 | Out-File "$env:ARTIFACTS\podman-ps.txt"
+          if (Test-Path "$env:TEMP\servicehub\logs") { Copy-Item "$env:TEMP\servicehub\logs" "$env:ARTIFACTS\servicehub-logs" -Recurse -ErrorAction SilentlyContinue }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-windows
+          path: e2e-artifacts
+          if-no-files-found: ignore

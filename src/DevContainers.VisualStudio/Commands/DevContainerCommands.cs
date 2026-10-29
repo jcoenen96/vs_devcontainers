@@ -15,6 +15,7 @@ internal static class DevContainerMenu
         [
             MenuChild.Command<OpenInContainerCommand>(),
             MenuChild.Command<OpenTerminalCommand>(),
+            MenuChild.Command<AddLaunchProfileCommand>(),
             MenuChild.Separator,
             MenuChild.Command<RebuildContainerCommand>(),
             MenuChild.Command<RebuildContainerNoCacheCommand>(),
@@ -79,4 +80,16 @@ internal sealed class OpenTerminalCommand(DevContainerService service) : Command
 
     public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
         service.OpenTerminalAsync(cancellationToken);
+}
+
+[VisualStudioContribution]
+internal sealed class AddLaunchProfileCommand(DevContainerService service) : Command
+{
+    public override CommandConfiguration CommandConfiguration => new("%DevContainers.AddLaunchProfile.DisplayName%")
+    {
+        Icon = new(ImageMoniker.KnownValues.Settings, IconSettings.IconAndText),
+    };
+
+    public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
+        service.AddLaunchProfileAsync(cancellationToken);
 }

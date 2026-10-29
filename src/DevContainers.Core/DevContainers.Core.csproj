@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Launch\vs-run.ps1" LogicalName="DevContainers.Core.Launch.vs-run.ps1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="DevContainers.Core.Tests" />
   </ItemGroup>
 

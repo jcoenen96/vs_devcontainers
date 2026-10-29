@@ -74,7 +74,7 @@ public sealed class ContainerRuntimeDetector(IProcessRunner runner, Func<string,
         {
             // Docker and Podman both accept this template. It fails when the daemon or Podman machine is not running.
             var result = await runner.RunAsync(
-                new ProcessSpec(path, ["version", "--format", "{{.Server.Version}}"]),
+                new ProcessSpec(path, ["version", "--format", "{{.Server.Version}} {{.Server.Os}}"]),
                 sink: null,
                 cancellationToken).ConfigureAwait(false);
 
@@ -85,7 +85,15 @@ public sealed class ContainerRuntimeDetector(IProcessRunner runner, Func<string,
                 return (null, detail.Length > 0 ? FirstLine(detail) : "the engine is not running");
             }
 
-            return (FirstLine(version), null);
+            // Docker Desktop switched to Windows containers (and Docker on Windows Server) cannot run dev containers,
+            // which are Linux containers.
+            var parts = FirstLine(version).Split(' ', 2);
+            if (parts.Length == 2 && parts[1].Equals("windows", StringComparison.OrdinalIgnoreCase))
+            {
+                return (null, "the engine runs Windows containers; dev containers need Linux containers (switch Docker Desktop to Linux containers)");
+            }
+
+            return (parts[0], null);
         }
         catch (ProcessStartException ex)
         {

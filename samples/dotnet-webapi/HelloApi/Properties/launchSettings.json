@@ -1,6 +1,12 @@
 {
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
+    "Dev Container": {
+      "commandName": "Executable",
+      "executablePath": "powershell.exe",
+      "commandLineArgs": "-NoProfile -ExecutionPolicy Bypass -File \"$(ProjectDir)..\\.devcontainer\\vs-run.ps1\" -LaunchProfile \"http\"",
+      "workingDirectory": "$(ProjectDir)"
+    },
     "http": {
       "commandName": "Project",
       "launchBrowser": false,
