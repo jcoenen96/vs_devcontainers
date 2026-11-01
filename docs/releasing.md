@@ -2,8 +2,8 @@
 
 A release is a version tag. The [release workflow](../.github/workflows/release.yml) builds the VSIX for the tag,
 runs the unit tests and publishes a GitHub release with the VSIX, its SHA-256 and the version's changelog section.
-Publishing to the Visual Studio Marketplace is a separate step (see [marketplace.md](marketplace.md) once it
-exists).
+Then it starts the Marketplace workflow, which waits for approval and publishes the signed VSIX (see
+[marketplace.md](marketplace.md)).
 
 ## Versions
 

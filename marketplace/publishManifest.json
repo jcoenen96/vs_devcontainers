@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json.schemastore.org/vsix-publish",
+  "categories": [ "coding", "build", "debug" ],
+  "identity": {
+    "internalName": "DevContainers"
+  },
+  "overview": "overview.md",
+  "priceCategory": "free",
+  "publisher": "__PUBLISHER__",
+  "private": false,
+  "qna": false,
+  "repo": "https://github.com/jcoenen96/vs_devcontainers"
+}

@@ -17,7 +17,14 @@ internal sealed class DevContainersExtension : Extension
             displayName: "Dev Containers",
             description: "Open, build and run your solution inside a dev container defined by devcontainer.json, with Docker or Podman.")
         {
-            Tags = ["devcontainer", "docker", "podman", "containers", "remote"],
+            Tags = ["devcontainer", "docker", "podman", "containers", "remote", "dotnet", "typescript"],
+
+            // Marketplace listing: icon, links, and the preview label until 1.0.
+            Icon = "Resources\\icon.png",
+            PreviewImage = "Resources\\preview.png",
+            MoreInfo = "https://github.com/jcoenen96/vs_devcontainers",
+            ReleaseNotes = "https://github.com/jcoenen96/vs_devcontainers/blob/main/CHANGELOG.md",
+            Preview = true,
 
             // Visual Studio 2026 (version 18) is the minimum supported version.
             InstallationTargetVersion = "[18.0,)",
