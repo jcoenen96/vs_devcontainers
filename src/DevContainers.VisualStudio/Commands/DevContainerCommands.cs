@@ -14,6 +14,7 @@ internal static class DevContainerMenu
         Children =
         [
             MenuChild.Command<OpenInContainerCommand>(),
+            MenuChild.Command<StartDebuggingInContainerCommand>(),
             MenuChild.Command<OpenTerminalCommand>(),
             MenuChild.Command<AddLaunchProfileCommand>(),
             MenuChild.Separator,
@@ -35,6 +36,15 @@ internal sealed class OpenInContainerCommand(DevContainerService service) : Comm
 
     public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
         service.OpenAsync(rebuild: false, noCache: false, cancellationToken);
+}
+
+[VisualStudioContribution]
+internal sealed class StartDebuggingInContainerCommand(DevContainerService service) : Command
+{
+    public override CommandConfiguration CommandConfiguration => new("%DevContainers.Debug.DisplayName%");
+
+    public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
+        service.DebugAsync(cancellationToken);
 }
 
 [VisualStudioContribution]

@@ -48,9 +48,10 @@ Two things have to be right, and the sample sets both:
 To run on Windows instead, pick the **https** or **http** profile. [docs/run-in-dev-container.md](../../docs/run-in-dev-container.md)
 explains how the profile works.
 
-Breakpoints are not hit yet: the debugger is not attached to the app in the container (`debuggerAttached` stays
-`false`). That is the next part of step 2. Until then, the container terminal works too: **Extensions > Dev
-Containers > Open Container Terminal**, then `dotnet run --project HelloApi --launch-profile https`.
+To debug it, set a breakpoint in `Program.cs` (in the `/api/info` handler) and use **Extensions > Dev Containers >
+Start Debugging in Container**. The first time installs the .NET debugger in the container. Open
+<http://localhost:5080/api/info>: the breakpoint is hit, and once you continue, `debuggerAttached` is `true`.
+[docs/debugging.md](../../docs/debugging.md) explains how it works.
 
 ## When the host cannot reach it
 

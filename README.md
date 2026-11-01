@@ -18,7 +18,7 @@ containers natively.
 ## How it works
 
 Visual Studio has no remote server like VS Code Server, so the editor stays on Windows. The workspace is mounted
-into the container, and the extension runs the container, its terminal, and (next) the build and debugger
+into the container, and the extension runs the container, its terminal, the build, the app and the .NET debugger
 inside it.
 
 Containers are created by the official [`@devcontainers/cli`](https://github.com/devcontainers/cli), the reference
@@ -57,6 +57,7 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 | Command | What it does |
 | --- | --- |
 | Open in Container | Starts the folder's container, reusing the one VS Code uses if there is one, and builds it only when there is none. Asks which config to use when there are several. |
+| Start Debugging in Container | Builds a .NET project in the container and starts it under Visual Studio's debugger, which runs in the container too. See [docs/debugging.md](docs/debugging.md). |
 | Open Container Terminal | Opens a shell inside the running container, with the container's `remoteEnv` and user. |
 | Add Run Profile for Dev Container | Adds a **Dev Container** launch profile to a project, so the Run button builds and runs it inside the container. See [docs/run-in-dev-container.md](docs/run-in-dev-container.md). |
 | Rebuild Container | Removes the container and creates it again from the current config. Asks first when VS Code has it open. |
@@ -145,7 +146,7 @@ CI runs the tests against both Docker and Podman and builds the VSIX on every pu
 1. **Foundation** (done): extension skeleton, devcontainer CLI engine, Docker and Podman, open, rebuild, stop,
    terminal, output log.
 2. **.NET inner loop:** the Run button builds and runs the project inside the container through a launch profile
-   (done). Next: attach the debugger to the app in the container.
+   (done), and Visual Studio's debugger debugs it there (done).
 3. **TypeScript inner loop:** run TypeScript and Node.js apps (their npm scripts) inside the container from the Run
    button, and attach Visual Studio's JavaScript debugger to them.
 4. **Parity and Marketplace:** a `customizations.visualstudio` section, Marketplace packaging.

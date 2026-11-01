@@ -346,10 +346,16 @@ function Sync-HostState([string] $containerId, [string] $user, [switch] $NoProje
 }
 
 if ($SyncOnly) {
-    # Called by the extension after Open in Container: the same setup as a run, without a project.
+    # Called by the extension after Open in Container (without a project) and before debugging (with one).
     $engine = $EnginePath
     if ($WorkspaceFolder) { $workspace = $WorkspaceFolder }
-    Sync-HostState $ContainerId $ContainerUser -NoProject
+    if ($Project) {
+        # Before debugging: also the project's user secrets.
+        $projectPath = (Resolve-Path $Project).Path
+        Sync-HostState $ContainerId $ContainerUser
+    } else {
+        Sync-HostState $ContainerId $ContainerUser -NoProject
+    }
     exit 0
 }
 

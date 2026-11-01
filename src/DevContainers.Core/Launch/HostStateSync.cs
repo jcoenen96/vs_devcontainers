@@ -12,7 +12,7 @@ namespace DevContainers.Core.Launch;
 /// </summary>
 public static class HostStateSync
 {
-    public static ProcessSpec CreateSpec(string scriptPath, ContainerRuntime runtime, UpResult container, string workspaceFolder) =>
+    public static ProcessSpec CreateSpec(string scriptPath, ContainerRuntime runtime, UpResult container, string workspaceFolder, string? projectFolder = null) =>
         new(
             OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh",
             [
@@ -21,6 +21,7 @@ public static class HostStateSync
                 "-ContainerId", container.ContainerId,
                 "-ContainerUser", container.RemoteUser ?? "root",
                 "-WorkspaceFolder", workspaceFolder,
+                .. (projectFolder is null ? Array.Empty<string>() : ["-Project", projectFolder]),
             ]);
 
     /// <summary>Writes the embedded launcher script to a temporary folder and returns its path.</summary>
@@ -34,11 +35,11 @@ public static class HostStateSync
     }
 
     /// <summary>Runs the copy. Never throws for a failed copy: the container works without it, and the log says why.</summary>
-    public static async Task RunAsync(IProcessRunner runner, ContainerRuntime runtime, UpResult container, string workspaceFolder, Action<string> log, CancellationToken cancellationToken)
+    public static async Task RunAsync(IProcessRunner runner, ContainerRuntime runtime, UpResult container, string workspaceFolder, Action<string> log, CancellationToken cancellationToken, string? projectFolder = null)
     {
         try
         {
-            var result = await runner.RunAsync(CreateSpec(WriteScript(), runtime, container, workspaceFolder), new LineSink(log), cancellationToken).ConfigureAwait(false);
+            var result = await runner.RunAsync(CreateSpec(WriteScript(), runtime, container, workspaceFolder, projectFolder), new LineSink(log), cancellationToken).ConfigureAwait(false);
             if (!result.Succeeded)
             {
                 log($"Copying settings from this computer into the container failed (exit code {result.ExitCode}).");
