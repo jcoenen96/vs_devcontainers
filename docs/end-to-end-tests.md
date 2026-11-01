@@ -3,7 +3,7 @@
 `tests/DevContainers.VisualStudio.UITests` tests the extension the way a user uses it: in a real Visual Studio 2026,
 with the extension installed from its `.vsix`, against real Linux containers. The CI workflow
 [`e2e-windows.yml`](../.github/workflows/e2e-windows.yml) runs it on every pull request against Podman, and every
-night (and on demand, **Actions > End-to-end > Run workflow**) against both Podman and Docker Desktop.
+night (and on demand, **Actions > End-to-end (Visual Studio on Windows) > Run workflow**) against both Podman and Docker Desktop.
 
 ## What the tests do
 
