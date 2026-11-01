@@ -60,7 +60,7 @@ Windows) and PowerShell 7.
    of this folder`). Only when there is none does it build the image and create the container. The build log
    shows in the window.
 4. **Copy what the app needs from Windows** into the container user's home folder (details below): the
-   project's user secrets, your NuGet.Config, and the HTTPS development certificate.
+   project's user secrets, your NuGet.Config, the HTTPS development certificate and your Git settings.
 5. **Stop the previous run.** Stopping the app in Visual Studio closes the window on Windows, but the app inside
    the container keeps running and would hold its port. Each run records its process group in
    `/tmp/vs-run-<project>.pid` inside the container; the next run stops that group first.
@@ -73,9 +73,9 @@ Windows) and PowerShell 7.
 
 ## What is copied from Windows
 
-The app should run in the container as it does on Windows, so the launcher copies three things in on every run.
-They are copied, not mounted, so the container keeps working when Windows changes them, and the next run copies
-the latest version.
+The app should run in the container as it does on Windows, so the launcher copies these in on every run, and
+**Open in Container** does the same (without user secrets, which belong to a project). They are copied, not
+mounted, so the container keeps working when Windows changes them, and the next run copies the latest version.
 
 | What | From (Windows) | To (container) | Notes |
 | --- | --- | --- | --- |
@@ -83,7 +83,24 @@ the latest version.
 | NuGet feeds and credentials | `%APPDATA%\NuGet\NuGet.Config` | `~/.nuget/NuGet/NuGet.Config` | Local and network folder feeds and Windows paths are left out. Passwords that Windows encrypted cannot be read on Linux and are left out with a message; use `ClearTextPassword` with a personal access token, or a credential provider in the image. |
 | HTTPS development certificate | The certificate `dotnet dev-certs https --trust` made, in `Cert:\CurrentUser\My` | The container user's certificate store, with `dotnet dev-certs https --clean --import` | Kestrel serves HTTPS with the certificate Windows already trusts, so browsers on Windows accept `https://localhost:<port>` without a warning. Imported only when the container does not have it yet. |
 
+| Git settings | `git config --global` on Windows, and `core.autocrlf` as this repository uses it | `git config --global` in the container | `user.name`, `user.email`, aliases, `init.defaultBranch`, `pull.rebase`, `push.autoSetupRemote`. Credential helpers, editors and paths are Windows specific and are not copied. `safe.directory` is set, because Git otherwise refuses a folder mounted from Windows ("dubious ownership"). |
+
 Each file is readable by the container user only (`chmod 600`). Nothing is written into your project folder.
+
+### Git inside the container
+
+Visual Studio's own Git tools run on Windows, against the same files, with your Windows credentials: commit,
+pull and push from Visual Studio as usual. Git in the container is there for the terminal and for builds that
+read Git (versioning tools, Source Link). It can read and commit, and it sees the same line endings as Git on
+Windows, because `core.autocrlf` is copied. Pushing from the container terminal needs credentials in the
+container, which are not forwarded from Windows; push from Visual Studio, or set up a token in the container.
+
+Shell scripts that run in the container must have LF line endings. With `core.autocrlf=true` Git checks them out
+with CRLF on Windows, and Linux then fails with `/bin/sh^M: bad interpreter`. Add this to `.gitattributes`:
+
+```
+*.sh text eol=lf
+```
 
 ## Stopping the app keeps the container
 

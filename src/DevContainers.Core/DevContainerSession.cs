@@ -1,5 +1,6 @@
 using DevContainers.Core.Cli;
 using DevContainers.Core.Configuration;
+using DevContainers.Core.Launch;
 using DevContainers.Core.Processes;
 using DevContainers.Core.Runtime;
 
@@ -137,6 +138,7 @@ public sealed class DevContainerSession(
 
             var cli = new DevContainerCli(this.cliLocator.Locate(settings.CliPath), runtime, this.runner);
             var result = await cli.UpAsync(options with { Identity = identity }, log, cancellationToken).ConfigureAwait(false);
+            await HostStateSync.RunAsync(this.runner, runtime, result, this.ConfigFile.WorkspaceFolder, log, cancellationToken).ConfigureAwait(false);
 
             this.Identity = identity;
             this.Container = result;

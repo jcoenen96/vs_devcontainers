@@ -57,6 +57,15 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             var container = Assert.Single(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default));
             Assert.True(container.IsRunning, $"Container {container.Id} is {container.State}.");
 
+            // Open in Container copied the Git settings of Windows, and Git works in the folder mounted from Windows.
+            var git = await new ProcessRunner().RunAsync(
+                new ProcessSpec(runtime.ExecutablePath, ["exec", "-u", "vscode", "-w", "/workspaces/vs_devcontainers", container.Id, "sh", "-c", "git config --global user.name && git status --short | wc -l"]),
+                null,
+                default);
+            this.Log($"Git in the container: {git.StandardOutput.Trim()} {git.StandardError.Trim()}");
+            Assert.True(git.Succeeded, git.StandardError);
+            Assert.StartsWith("Dev Container Tester", git.StandardOutput.Trim());
+
             // 3. Debug > Start Without Debugging runs the app inside the container; the host reaches it on port 5080,
             // which the extension forwards (forwardPorts) while the container runs.
             // Nothing answers before that, so the answer below comes from this run.
