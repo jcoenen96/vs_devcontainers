@@ -365,8 +365,8 @@ function Get-LaunchProfile([string] $name) {
 }
 
 function ConvertTo-ContainerUrls([string] $urls) {
-    # localhost in the container is the container's own loopback, which Windows cannot reach through a forwarded
-    # port. Listen on every interface instead, as the project templates' localhost URLs mean on Windows.
+    # localhost in the container is the container's own loopback: the extension's port forwarding reaches it, but
+    # appPort, other Compose services and the container's address do not. Listen on every interface instead.
     return (($urls -split ';' | Where-Object { $_.Trim() } | ForEach-Object {
         $_.Trim() -replace '^([A-Za-z]+://)(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)', '${1}0.0.0.0'
     }) -join ';')

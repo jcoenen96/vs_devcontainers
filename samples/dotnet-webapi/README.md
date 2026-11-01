@@ -14,9 +14,9 @@ debugger, is reachable from Windows. It listens on port 5080 (HTTP) and 5443 (HT
 The launch profiles use the usual `localhost` URLs, as the project template makes them, and two things make
 them reachable from Windows:
 
-1. **Kestrel listens on every interface in the container.** Inside a container `localhost` is the container's
-   own loopback, which a request from the host never reaches. The extension runs the profile with `localhost`
-   replaced by `0.0.0.0`, so `https://localhost:5443` listens as `https://0.0.0.0:5443`.
+1. **Kestrel listens on every interface in the container.** The extension runs the profile with `localhost`
+   replaced by `0.0.0.0`, so `https://localhost:5443` listens as `https://0.0.0.0:5443`, and `appPort` or another
+   container can reach it too, not only the extension's port forwarding.
    `ASPNETCORE_URLS=http://0.0.0.0:5080` in `containerEnv` covers launches without a profile, such as
    `dotnet run --no-launch-profile` in the container terminal.
 2. **The ports are forwarded to the host.** The extension forwards the ports of the profile that the Dev Container

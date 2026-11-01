@@ -119,8 +119,9 @@ the container open.
 
 The app runs inside the container, and Windows reaches it without changes to the project:
 
-- **`localhost` URLs listen on every interface in the container.** Inside the container `localhost` is the
-  container's own loopback, which a forwarded port does not reach. So the launcher (and **Start Debugging in
+- **`localhost` URLs listen on every interface in the container.** The extension's port forwarding reaches an
+  app that listens on the container's `localhost` too, but `appPort`, other services of a Docker Compose setup
+  and tools that connect to the container's address do not. So the launcher (and **Start Debugging in
   Container**) turns `localhost`, `127.0.0.1` and `[::1]` in the profile's `applicationUrl` into `0.0.0.0`:
   `https://localhost:7183;http://localhost:5049` from the project template listens as
   `https://0.0.0.0:7183;http://0.0.0.0:5049`. Other URLs are kept as they are.

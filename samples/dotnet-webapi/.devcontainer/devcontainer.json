@@ -2,9 +2,9 @@
 {
   "name": "dotnet-webapi",
   "image": "mcr.microsoft.com/devcontainers/dotnet:10.0",
-  // For launches without a launch profile, such as dotnet run --no-launch-profile in the container terminal: Kestrel
-  // has to listen on every interface inside the container, not only on its loopback, or a forwarded port leads
-  // nowhere. Launch profiles keep their usual localhost URLs; the extension makes them listen on every interface.
+  // For launches without a launch profile, such as dotnet run --no-launch-profile in the container terminal: listen
+  // on every interface inside the container, as the launch profiles do when the extension runs them (their localhost
+  // URLs become 0.0.0.0), so the container's address reaches the app and not only the extension's port forwarding.
   "containerEnv": {
     "ASPNETCORE_URLS": "http://0.0.0.0:5080",
     "ASPNETCORE_ENVIRONMENT": "Development"
