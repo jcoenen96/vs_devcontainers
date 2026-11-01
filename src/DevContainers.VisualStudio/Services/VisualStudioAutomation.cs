@@ -39,6 +39,78 @@ internal static class VisualStudioAutomation
         }
     }
 
+    /// <summary>
+    /// Attaches Visual Studio's JavaScript debugger to a Node.js inspector (such as <c>localhost:9229</c>), as
+    /// Debug > Attach to Process does with the "JavaScript and TypeScript (Chrome DevTools/V8 Inspector)" connection
+    /// type. Returns false when this Visual Studio has no such connection type or nothing answers at the target.
+    /// </summary>
+    public static async Task<bool> AttachToNodeInspectorAsync(string solutionPath, string target, TimeSpan timeout, Action<string> log, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        string? lastProblem = null;
+        while (true)
+        {
+            try
+            {
+                var dte = FindDte(solutionPath) ?? throw new InvalidOperationException(
+                    $"No Visual Studio instance with {Path.GetFileName(solutionPath)} open was found to attach the debugger in.");
+                var debugger = Get(dte, "Debugger")!;
+                var transports = Get(debugger, "Transports")!;
+                object? transport = null;
+                for (var i = 1; i <= (int)Get(transports, "Count")!; i++)
+                {
+                    var candidate = Invoke(transports, "Item", i)!;
+                    var name = Get(candidate, "Name") as string ?? string.Empty;
+                    if (name.Contains("V8", StringComparison.OrdinalIgnoreCase) || name.Contains("DevTools", StringComparison.OrdinalIgnoreCase))
+                    {
+                        transport = candidate;
+                        break;
+                    }
+                }
+
+                if (transport is null)
+                {
+                    var names = new List<string>();
+                    for (var i = 1; i <= (int)Get(transports, "Count")!; i++)
+                    {
+                        names.Add(Get(Invoke(transports, "Item", i)!, "Name") as string ?? "?");
+                    }
+
+                    log($"Visual Studio has no JavaScript (V8 inspector) debugger connection type. It has: {string.Join(", ", names)}.");
+                    return false;
+                }
+
+                var processes = Invoke(debugger, "GetProcesses", transport, target)!;
+                if ((int)Get(processes, "Count")! > 0)
+                {
+                    Invoke(Invoke(processes, "Item", 1)!, "Attach");
+                    return true;
+                }
+
+                lastProblem = $"no process listed at {target} for '{Get(transport, "Name")}'";
+            }
+            catch (Exception ex) when (IsBusy(ex) || ex is COMException or TargetInvocationException or InvalidOperationException)
+            {
+                // Busy, or nothing answers at the target yet: try again until the timeout.
+                lastProblem = (ex.InnerException ?? ex).Message;
+            }
+
+            if (DateTime.UtcNow > deadline)
+            {
+                log($"Could not attach the JavaScript debugger to {target}: {lastProblem}");
+                return false;
+            }
+
+            await Task.Delay(1000, cancellationToken);
+        }
+    }
+
+    private static object? Get(object target, string property) =>
+        target.GetType().InvokeMember(property, BindingFlags.GetProperty, null, target, null);
+
+    private static object? Invoke(object target, string method, params object[] arguments) =>
+        target.GetType().InvokeMember(method, BindingFlags.InvokeMethod, null, target, arguments);
+
     private static bool IsBusy(Exception ex) =>
         (ex as COMException ?? ex.InnerException as COMException)?.ErrorCode is RejectedByCallee or ServerBusy;
 
@@ -61,7 +133,7 @@ internal static class VisualStudioAutomation
             {
                 var solution = dte.GetType().InvokeMember("Solution", BindingFlags.GetProperty, null, dte, null);
                 var fullName = solution?.GetType().InvokeMember("FullName", BindingFlags.GetProperty, null, solution, null) as string;
-                if (fullName is not null && string.Equals(Path.GetFullPath(fullName), Path.GetFullPath(solutionPath), StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrEmpty(fullName) && string.Equals(Path.GetFullPath(fullName).TrimEnd('\\'), Path.GetFullPath(solutionPath).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 {
                     return dte;
                 }

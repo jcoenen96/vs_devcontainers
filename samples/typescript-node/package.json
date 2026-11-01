@@ -1,0 +1,17 @@
+{
+  "name": "hello-node",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A small TypeScript HTTP server for trying the Dev Containers extension.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --enable-source-maps dist/server.js",
+    "predev": "tsc",
+    "dev": "node --enable-source-maps dist/server.js"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}

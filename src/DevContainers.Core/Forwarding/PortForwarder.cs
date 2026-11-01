@@ -53,10 +53,50 @@ public sealed class PortForwarder(ContainerRuntime runtime, string containerId, 
         "if command -v node >/dev/null 2>&1; then exec node -e 'const s=require(\"net\").connect(+process.argv[2],process.argv[1]);process.stdin.pipe(s);s.pipe(process.stdout);s.on(\"error\",()=>process.exit(1))' \"$h\" \"$p\"; fi; " +
         "echo 'No socat, bash, nc, python3 or node in the container to forward the port with.' >&2; exit 127";
 
-    private readonly List<TcpListener> listeners = [];
+    private readonly Dictionary<PortSpec, List<TcpListener>> listeners = [];
     private readonly CancellationTokenSource stopping = new();
+    private IReadOnlyList<ContainerListener> containerListeners = [];
 
     public string ContainerId => containerId;
+
+    /// <summary>The ports being forwarded now.</summary>
+    public IReadOnlyCollection<PortSpec> Forwarded
+    {
+        get
+        {
+            lock (this.listeners)
+            {
+                return this.listeners.Keys.ToList();
+            }
+        }
+    }
+
+    /// <summary>
+    /// What listens in the container (from <see cref="ContainerPortScanner"/>), so a <c>localhost</c> port is
+    /// relayed to the address its program listens on: <c>127.0.0.1</c>, or <c>::1</c> for one that listens only there.
+    /// </summary>
+    public void SetContainerListeners(IReadOnlyList<ContainerListener> listeners) => this.containerListeners = listeners;
+
+    /// <summary>
+    /// Forwards exactly <paramref name="ports"/>: starts the new ones and stops the ones no longer wanted, leaving
+    /// the others (and their open connections) alone. Returns how each newly started port ended up.
+    /// </summary>
+    public IReadOnlyList<ForwardedPort> Update(IEnumerable<PortSpec> ports)
+    {
+        var wanted = ports.ToHashSet();
+        lock (this.listeners)
+        {
+            foreach (var spec in this.listeners.Keys.Where(k => !wanted.Contains(k)).ToList())
+            {
+                this.listeners[spec].ForEach(l => l.Stop());
+                this.listeners.Remove(spec);
+            }
+
+            wanted.ExceptWith(this.listeners.Keys);
+        }
+
+        return this.Start(wanted);
+    }
 
     /// <summary>
     /// Starts listening on <c>localhost</c> for each port. A port that is already in use on this computer is
@@ -104,7 +144,7 @@ public sealed class PortForwarder(ContainerRuntime runtime, string containerId, 
 
             lock (this.listeners)
             {
-                this.listeners.AddRange(started);
+                this.listeners[spec] = started;
             }
 
             foreach (var listener in started)
@@ -123,7 +163,11 @@ public sealed class PortForwarder(ContainerRuntime runtime, string containerId, 
         this.stopping.Cancel();
         lock (this.listeners)
         {
-            this.listeners.ForEach(l => l.Stop());
+            foreach (var started in this.listeners.Values)
+            {
+                started.ForEach(l => l.Stop());
+            }
+
             this.listeners.Clear();
         }
 
@@ -160,8 +204,9 @@ public sealed class PortForwarder(ContainerRuntime runtime, string containerId, 
                 RedirectStandardError = true,
                 CreateNoWindow = true,
             };
-            // "localhost" in the container may resolve to ::1 first, where servers that bind 0.0.0.0 do not listen.
-            var host = spec.Host == "localhost" ? "127.0.0.1" : spec.Host;
+            // "localhost" in the container may resolve to ::1 first, where servers that bind 0.0.0.0 do not listen, so
+            // connect to the address the program listens on: 127.0.0.1, or ::1 for one that listens only there.
+            var host = spec.Host == "localhost" ? ContainerPortScanner.ConnectAddress(this.containerListeners, spec.Port) ?? "127.0.0.1" : spec.Host;
             foreach (var arg in new[] { "exec", "-i", containerId, "sh", "-c", RelayScript, "sh", host, spec.Port.ToString() })
             {
                 startInfo.ArgumentList.Add(arg);

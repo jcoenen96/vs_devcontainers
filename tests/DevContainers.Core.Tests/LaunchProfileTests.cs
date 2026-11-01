@@ -117,6 +117,7 @@ public class LaunchProfileTests
     [Theory]
     [InlineData("samples/dotnet-webapi/.devcontainer/vs-run.ps1")]
     [InlineData("samples/dotnet-console/.devcontainer/vs-run.ps1")]
+    [InlineData("samples/typescript-node/.devcontainer/vs-run.ps1")]
     public void Samples_ShipTheCurrentLauncherScript(string relativePath)
     {
         // The samples carry a copy of the script, as a user's repository would. Regenerate it with the

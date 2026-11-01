@@ -125,10 +125,9 @@ The app runs inside the container, and Windows reaches it without changes to the
   Container**) turns `localhost`, `127.0.0.1` and `[::1]` in the profile's `applicationUrl` into `0.0.0.0`:
   `https://localhost:7183;http://localhost:5049` from the project template listens as
   `https://0.0.0.0:7183;http://0.0.0.0:5049`. Other URLs are kept as they are.
-- **The profile's ports are forwarded.** While the container runs, the extension forwards the ports of that
-  `applicationUrl` to `localhost` on Windows, together with `forwardPorts` from devcontainer.json, so
-  `http://localhost:5049` on Windows reaches the app as it would without a container. See
-  [port-forwarding.md](port-forwarding.md).
+- **The app's ports are forwarded.** While the container runs, the extension forwards the ports the app listens
+  on to `localhost` on Windows, together with `forwardPorts` from devcontainer.json, so `http://localhost:5049`
+  on Windows reaches the app as it would without a container. See [port-forwarding.md](port-forwarding.md).
 
 ## Project types
 
@@ -157,7 +156,8 @@ not adjusted for the container. Run the app host on Windows for now.
 
 - **The profile runs without the debugger.** Start it with **Debug > Start Without Debugging** (Ctrl+F5). To
   debug, use **Extensions > Dev Containers > Start Debugging in Container**; see [debugging.md](debugging.md).
-- **.NET projects only.** The script runs `dotnet run`. TypeScript apps come with step 3 of the plan.
+- **.NET projects.** For TypeScript and Node.js apps, use **Run npm Script in Container**; see
+  [typescript.md](typescript.md).
 - **`launchBrowser`** is ignored: no browser opens. Open the forwarded URL yourself.
 
 ## Tested
