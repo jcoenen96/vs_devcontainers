@@ -1,12 +1,12 @@
 # HelloApi: a Web API in a dev container
 
 A minimal ASP.NET Core Web API (.NET 10) for checking that an app running inside the dev container, also under the
-debugger, is reachable from Windows. It listens on port 5080.
+debugger, is reachable from Windows. It listens on port 5080 (HTTP) and 5443 (HTTPS).
 
 | Endpoint | Returns |
 | --- | --- |
 | `GET /` | A short text, handy as a first check in a browser. |
-| `GET /api/info` | Where the API runs: OS, machine name, whether it is in a container, whether a debugger is attached, the URLs Kestrel listens on, and the caller's address. |
+| `GET /api/info` | Where the API runs: OS, machine name, whether it is in a container, whether a debugger is attached, the URLs Kestrel listens on, the `HelloApi:Greeting` user secret, and the caller's address. |
 | `GET /api/echo/{text}` | The text back, as JSON. |
 
 ## How it is reachable from the host
@@ -31,21 +31,26 @@ Two things have to be right, and the sample sets both:
 3. Start it with **Debug > Start Without Debugging** (Ctrl+F5). A console window opens and:
    - offers to install Node.js and the devcontainer CLI if they are missing,
    - builds and starts the dev container (the first time takes a few minutes),
-   - runs `dotnet run --project HelloApi --launch-profile http` inside the container.
+   - copies the user secrets, your NuGet.Config and the HTTPS development certificate into the container,
+   - runs `dotnet run --project HelloApi --launch-profile https` inside the container.
 
-   Wait for `Now listening on: http://0.0.0.0:5080`.
+   Wait for `Now listening on: https://0.0.0.0:5443`.
 4. From Windows, open <http://localhost:5080/api/info> in a browser, or open `HelloApi\HelloApi.http` in Visual
    Studio and choose **Send request**. You should see JSON with a Linux `os`, `inContainer: true` and the
    container's `machineName`. `curl.exe http://localhost:5080/api/info` from PowerShell gives the same.
-5. Stop it from Visual Studio or close the window. The next run stops the previous app in the container first, so
+   <https://localhost:5443/api/info> works too, with no certificate warning once Windows trusts the development
+   certificate (`dotnet dev-certs https --trust`).
+5. To see a user secret reach the container, run `dotnet user-secrets set HelloApi:Greeting "Hi"` in the
+   `HelloApi` folder on Windows and run again: `greeting` in `/api/info` shows it.
+6. Stop it from Visual Studio or close the window. The next run stops the previous app in the container first, so
    the port is free again.
 
-To run on Windows instead, pick the **http** profile. [docs/run-in-dev-container.md](../../docs/run-in-dev-container.md)
+To run on Windows instead, pick the **https** or **http** profile. [docs/run-in-dev-container.md](../../docs/run-in-dev-container.md)
 explains how the profile works.
 
 Breakpoints are not hit yet: the debugger is not attached to the app in the container (`debuggerAttached` stays
 `false`). That is the next part of step 2. Until then, the container terminal works too: **Extensions > Dev
-Containers > Open Container Terminal**, then `dotnet run --project HelloApi --launch-profile http`.
+Containers > Open Container Terminal**, then `dotnet run --project HelloApi --launch-profile https`.
 
 ## When the host cannot reach it
 

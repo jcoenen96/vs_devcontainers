@@ -4,8 +4,16 @@
     "Dev Container": {
       "commandName": "Executable",
       "executablePath": "powershell.exe",
-      "commandLineArgs": "-NoProfile -ExecutionPolicy Bypass -File \"$(ProjectDir)..\\.devcontainer\\vs-run.ps1\" -LaunchProfile \"http\"",
+      "commandLineArgs": "-NoProfile -ExecutionPolicy Bypass -File \"$(ProjectDir)..\\.devcontainer\\vs-run.ps1\" -LaunchProfile \"https\"",
       "workingDirectory": "$(ProjectDir)"
+    },
+    "https": {
+      "commandName": "Project",
+      "launchBrowser": false,
+      "applicationUrl": "https://0.0.0.0:5443;http://0.0.0.0:5080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
     },
     "http": {
       "commandName": "Project",

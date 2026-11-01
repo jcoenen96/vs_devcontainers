@@ -112,6 +112,12 @@ jobs:
           }
           "Installed at $($installed.DirectoryName)"
 
+      - name: Set up the host like a developer's machine
+        # A development certificate for HTTPS and a user secret, which the launcher copies into the container.
+        run: |
+          dotnet dev-certs https
+          dotnet user-secrets set HelloApi:Greeting "hello from Windows" --project samples/dotnet-webapi/HelloApi
+
       - name: Run the launcher with Windows PowerShell
         # The Dev Container launch profile's script on its own, with its output in this log: Windows PowerShell 5.1,
         # Windows paths, Podman. Visual Studio runs the same command line.
@@ -120,7 +126,7 @@ jobs:
         run: |
           $out = Join-Path $env:ARTIFACTS 'launcher-out.txt'
           $err = Join-Path $env:ARTIFACTS 'launcher-err.txt'
-          $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '..\.devcontainer\vs-run.ps1', '-LaunchProfile', 'http' -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+          $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '..\.devcontainer\vs-run.ps1', '-LaunchProfile', 'https' -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
           $info = $null
           $deadline = (Get-Date).AddMinutes(8)
           while (-not $info -and -not $p.HasExited -and (Get-Date) -lt $deadline) {
@@ -132,11 +138,25 @@ jobs:
           '--- launcher output'; Get-Content $out
           '--- launcher errors'; Get-Content $err
           if (-not $p.HasExited) { taskkill /T /F /PID $p.Id | Out-Null }
+          "GET /api/info: $info"
+          $problems = @()
+          if ($info -notmatch '"inContainer":true') { $problems += 'The launcher did not start the sample API in the container.' }
+          if ($info -notmatch '"greeting":"hello from Windows"') { $problems += 'The user secret did not reach the app in the container.' }
+
+          # HTTPS works in the container with the development certificate of this computer: the container's
+          # certificate store holds it (by thumbprint), and Kestrel serves HTTPS with it.
+          $thumbprint = (Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Extensions | Where-Object { $_.Oid.Value -eq '1.3.6.1.4.1.311.84.1.1' } } | Sort-Object NotAfter -Descending | Select-Object -First 1).Thumbprint
+          $store = podman exec -u vscode $id sh -c 'ls $HOME/.dotnet/corefx/cryptography/x509stores/my/'
+          "Windows development certificate: $thumbprint. In the container: $store"
+          if (-not $thumbprint -or "$store" -notmatch $thumbprint) { $problems += 'The container does not have the development certificate of Windows.' }
+          $https = podman exec $id curl -sk https://localhost:5443/api/info 2>$null
+          "GET https://localhost:5443/api/info: $https"
+          if ($https -notmatch '"inContainer":true') { $problems += 'The app in the container does not answer over HTTPS.' }
+
           # The app keeps running in the container after its window closes (by design); stop the container so the
           # Visual Studio test below starts from scratch and its own run is what answers.
           podman ps -q | ForEach-Object { podman stop $_ | Out-Null }
-          "GET /api/info: $info"
-          if ($info -notmatch '"inContainer":true') { throw 'The launcher did not start the sample API in the container.' }
+          if ($problems) { throw ($problems -join ' ') }
 
       - name: Drive Visual Studio
         if: success() || failure()

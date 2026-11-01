@@ -16,6 +16,8 @@ app.MapGet("/api/info", (HttpContext context) => new
         || File.Exists("/run/.containerenv"),
     DebuggerAttached = Debugger.IsAttached,
     Listening = app.Urls,
+    // Set on Windows with 'dotnet user-secrets set HelloApi:Greeting Hi'; the launcher copies user secrets in.
+    Greeting = app.Configuration["HelloApi:Greeting"],
     RequestFrom = context.Connection.RemoteIpAddress?.ToString(),
     Time = DateTimeOffset.Now,
 });

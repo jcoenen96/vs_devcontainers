@@ -9,8 +9,10 @@
       2. finds a running Docker or Podman,
       3. starts the dev container with "devcontainer up": it reuses the container of this folder, also one that
          VS Code created and may have open, and builds one only the first time,
-      4. stops the app if a previous run is still going in the container,
-      5. runs "dotnet run" for the project inside the container, in this window.
+      4. copies the project's user secrets, your NuGet.Config and the HTTPS development certificate into the
+         container,
+      5. stops the app if a previous run is still going in the container,
+      6. runs "dotnet run" for the project inside the container, in this window.
 
     Stopping the app never stops the container, so VS Code and Visual Studio can share it.
 
@@ -188,6 +190,121 @@ function Invoke-DevContainer([string[]] $arguments) {
     & $cli.File @($cli.Prefix + $arguments)
 }
 
+function Get-UserSecretsId {
+    # The project file (or the one project file in the project folder) holds the id 'dotnet user-secrets init' added.
+    $file = if (Test-Path $projectPath -PathType Leaf) { Get-Item $projectPath } else { Get-ChildItem $projectPath -Filter *.csproj | Select-Object -First 1 }
+    if (-not $file) { return $null }
+    $match = Select-String -Path $file.FullName -Pattern '<UserSecretsId>\s*([^<\s]+)\s*</UserSecretsId>' | Select-Object -First 1
+    if ($match) { return $match.Matches[0].Groups[1].Value }
+    return $null
+}
+
+function Get-HostNuGetConfig {
+    # The user's NuGet.Config, with what only works on this computer removed: local and network feeds, Windows
+    # paths, and passwords that Windows encrypted (DPAPI) and Linux cannot read.
+    $path = if ($onWindows) { Join-Path $env:APPDATA 'NuGet\NuGet.Config' } else { Join-Path $HOME '.nuget/NuGet/NuGet.Config' }
+    if (-not (Test-Path $path)) { return $null }
+    try { [xml] $xml = Get-Content -Raw -Path $path } catch { Write-Step "Not copying $path to the container: it is not valid XML."; return $null }
+    $root = $xml.configuration
+    if (-not $root) { return $null }
+
+    $removed = @()
+    if ($root.packageSources) {
+        foreach ($source in @($root.packageSources.SelectNodes('add'))) {
+            if ($source.value -notmatch '^https?://') {
+                $removed += $source.key
+                [void] $root.packageSources.RemoveChild($source)
+            }
+        }
+    }
+
+    foreach ($section in @('disabledPackageSources', 'packageSourceMapping', 'packageSourceCredentials')) {
+        $node = $root.SelectSingleNode($section)
+        if (-not $node) { continue }
+        foreach ($child in @($node.ChildNodes)) {
+            $key = if ($child.key) { $child.key } else { [System.Xml.XmlConvert]::DecodeName($child.LocalName) }
+            if ($removed -contains $key) { [void] $node.RemoveChild($child) }
+        }
+    }
+
+    if ($root.packageSourceCredentials) {
+        foreach ($source in @($root.packageSourceCredentials.ChildNodes)) {
+            foreach ($entry in @($source.SelectNodes('add[@key="Password"]'))) {
+                Write-Step ("The NuGet password of '" + [System.Xml.XmlConvert]::DecodeName($source.LocalName) + "' is encrypted for Windows and is not copied. Use a ClearTextPassword or a credential provider for feeds the container restores from.")
+                [void] $source.RemoveChild($entry)
+            }
+        }
+    }
+
+    foreach ($section in @('config', 'packageRestore', 'bindingRedirects')) {
+        $node = $root.SelectSingleNode($section)
+        if (-not $node) { continue }
+        foreach ($entry in @($node.SelectNodes('add'))) {
+            if ($entry.value -match '^([A-Za-z]:[\\/]|\\\\)') { [void] $node.RemoveChild($entry) }
+        }
+    }
+
+    return [System.Text.Encoding]::UTF8.GetBytes($xml.OuterXml)
+}
+
+function Get-HostDevCertificate {
+    # The ASP.NET Core HTTPS development certificate Windows trusts ('dotnet dev-certs https --trust'), identified
+    # by its marker extension. Only Windows keeps it in a certificate store PowerShell can read.
+    if (-not $onWindows) { return $null }
+    $now = Get-Date
+    return Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
+        Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt $now -and ($_.Extensions | Where-Object { $_.Oid.Value -eq '1.3.6.1.4.1.311.84.1.1' }) } |
+        Sort-Object NotAfter -Descending |
+        Select-Object -First 1
+}
+
+function Sync-HostState([string] $containerId, [string] $user) {
+    # Copies what the app needs from this computer into the container user's home, so it runs there as it does on
+    # Windows: user secrets, NuGet feeds and their credentials, and the HTTPS development certificate. Files go
+    # through stdin as base64, one "path data" line each.
+    $files = @()
+    $secretsId = Get-UserSecretsId
+    if ($secretsId) {
+        $secrets = if ($onWindows) { Join-Path $env:APPDATA "Microsoft\UserSecrets\$secretsId\secrets.json" } else { Join-Path $HOME ".microsoft/usersecrets/$secretsId/secrets.json" }
+        if (Test-Path $secrets) {
+            $files += , @(".microsoft/usersecrets/$secretsId/secrets.json", [System.IO.File]::ReadAllBytes($secrets))
+            Write-Step 'Copying the user secrets of this project into the container'
+        }
+    }
+
+    $nuget = Get-HostNuGetConfig
+    if ($nuget) {
+        $files += , @('.nuget/NuGet/NuGet.Config', $nuget)
+        Write-Step 'Copying your NuGet.Config (feeds and credentials) into the container'
+    }
+
+    $certificate = Get-HostDevCertificate
+    $password = $null
+    if ($certificate) {
+        # Import it only when the container does not have this certificate yet.
+        $store = '.dotnet/corefx/cryptography/x509stores/my/' + $certificate.Thumbprint + '.pfx'
+        & $engine exec -u $user $containerId sh -c "test -f `$HOME/$store" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            $password = [guid]::NewGuid().ToString('N')
+            $files += , @('.vs-devcontainer/devcert.pfx', $certificate.Export('Pfx', $password))
+            Write-Step 'Copying the HTTPS development certificate Windows trusts into the container'
+        }
+    }
+
+    if ($files.Count -eq 0) { return }
+    $lines = $files | ForEach-Object { $_[0] + ' ' + [Convert]::ToBase64String($_[1]) }
+    $write = 'tr -d ''\r'' | while read p d; do mkdir -p $(dirname $HOME/$p) && echo $d | base64 -d > $HOME/$p && chmod 600 $HOME/$p || exit 1; done'
+    $lines | & $engine exec -i -u $user $containerId sh -c $write
+    if ($LASTEXITCODE -ne 0) { Write-Step 'Copying into the container failed; the app may miss secrets, feeds or the certificate.'; return }
+
+    if ($password) {
+        # --clean replaces any other development certificate, so Kestrel picks the one Windows trusts.
+        $import = "dotnet dev-certs https --clean --import `$HOME/.vs-devcontainer/devcert.pfx -p $password >/dev/null; s=`$?; rm -f `$HOME/.vs-devcontainer/devcert.pfx; exit `$s"
+        & $engine exec -u $user $containerId sh -c $import
+        if ($LASTEXITCODE -ne 0) { Write-Step 'Importing the HTTPS development certificate into the container failed.' }
+    }
+}
+
 if (-not (Test-Path $configFile)) { Stop-WithError "The dev container configuration $configFile was not found." }
 $configFile = (Resolve-Path $configFile).Path
 
@@ -215,6 +332,12 @@ Write-Step "Starting the dev container for $workspace (the first time this build
 $upOutput = Invoke-DevContainer (@('up') + $common)
 if ($LASTEXITCODE -ne 0) {
     Stop-WithError ("devcontainer up failed: " + ($upOutput | Select-Object -Last 1))
+}
+
+$up = $upOutput | Where-Object { "$_" -match '^\{.*"outcome"' } | Select-Object -Last 1 | ConvertFrom-Json
+if ($up.containerId) {
+    $user = if ($up.remoteUser) { $up.remoteUser } else { 'root' }
+    Sync-HostState $up.containerId $user
 }
 
 # A run stopped from Visual Studio ends this window but not the app inside the container. Stop it, so the port is

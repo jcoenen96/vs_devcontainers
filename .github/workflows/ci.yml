@@ -50,6 +50,8 @@ jobs:
       - name: Start HelloApi with the Dev Container launch profile's script
         working-directory: samples/dotnet-webapi/HelloApi
         run: |
+          # A user secret on the host, which the launcher copies into the container.
+          dotnet user-secrets set HelloApi:Greeting "hello from the host"
           nohup pwsh -NoProfile -File ../.devcontainer/vs-run.ps1 -LaunchProfile http > "$RUNNER_TEMP/run.log" 2>&1 &
           # Only Visual Studio and VS Code forward ports, so ask from inside the container.
           for i in $(seq 1 150); do
@@ -60,6 +62,7 @@ jobs:
           cat "$RUNNER_TEMP/run.log"
           cat "$RUNNER_TEMP/info.json"
           grep -q '"inContainer":true' "$RUNNER_TEMP/info.json"
+          grep -q '"greeting":"hello from the host"' "$RUNNER_TEMP/info.json"
 
   vsix:
     name: Build VSIX

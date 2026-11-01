@@ -72,6 +72,13 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             this.Log("GET /api/info: " + info);
             Assert.Contains("\"inContainer\":true", info);
 
+            // HTTPS is forwarded too, and the app serves it with Windows' development certificate, which the
+            // launcher copied into the container.
+            var served = await GetServedCertificateAsync("https://localhost:5443/api/info");
+            this.Log($"HTTPS: {served.Body}; certificate {served.Thumbprint}");
+            Assert.Contains("\"inContainer\":true", served.Body);
+            Assert.Equal(HostDevCertificateThumbprint(), served.Thumbprint);
+
             // The app ran in the container that Open in Container started, not in a second one.
             Assert.Equal(container.Id, Assert.Single(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default)).Id);
 
@@ -141,6 +148,34 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
         {
             return false;
         }
+    }
+
+    private static async Task<(string Body, string? Thumbprint)> GetServedCertificateAsync(string url)
+    {
+        string? thumbprint = null;
+        using var handler = new HttpClientHandler
+        {
+            // The certificate is checked below, by thumbprint; the CI machine does not trust it.
+            ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
+            {
+                thumbprint = certificate?.Thumbprint;
+                return true;
+            },
+        };
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+        return (await client.GetStringAsync(url), thumbprint);
+    }
+
+    private static string? HostDevCertificateThumbprint()
+    {
+        using var store = new System.Security.Cryptography.X509Certificates.X509Store(
+            System.Security.Cryptography.X509Certificates.StoreName.My,
+            System.Security.Cryptography.X509Certificates.StoreLocation.CurrentUser);
+        store.Open(System.Security.Cryptography.X509Certificates.OpenFlags.ReadOnly);
+        return store.Certificates
+            .Where(c => c.HasPrivateKey && c.NotAfter > DateTime.Now && c.Extensions.Any(e => e.Oid?.Value == "1.3.6.1.4.1.311.84.1.1"))
+            .OrderByDescending(c => c.NotAfter)
+            .FirstOrDefault()?.Thumbprint;
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout, string what, VisualStudioDriver vs)
