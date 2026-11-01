@@ -222,13 +222,19 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
                 catch (InvalidOperationException ex)
                 {
                     this.Log("::warning title=JavaScript debugger::No debug session after the attach (no Stop Debugging): " + ex.InnerException?.Message);
-                }
 
-                // A fallback prompt that came meanwhile would block the next menus.
-                if (vs.TryReadPrompt("could not attach by itself") is { } late)
-                {
-                    this.Log("::warning title=JavaScript debugger::The debugger did not attach by itself: " + late);
-                    vs.ClosePrompt();
+                    // The extension keeps trying for two minutes, then says so in a prompt, which would block the next
+                    // menus: wait for it.
+                    try
+                    {
+                        var late = vs.WaitForPrompt(["could not attach by itself"], [], TimeSpan.FromMinutes(3));
+                        this.Log("::warning title=JavaScript debugger::The debugger did not attach by itself: " + late);
+                        vs.ClosePrompt();
+                    }
+                    catch (TimeoutException)
+                    {
+                        this.Log("::warning title=JavaScript debugger::Neither a debug session nor the fallback prompt.");
+                    }
                 }
             }
 
