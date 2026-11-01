@@ -7,6 +7,7 @@ using DevContainers.Core.Diagnostics;
 using DevContainers.Core.Launch;
 using DevContainers.Core.Node;
 using DevContainers.Core.Runtime;
+using DevContainers.Core.Sdk;
 using DevContainers.Core.Testing;
 using DevContainers.VisualStudio.Settings;
 using Microsoft.VisualStudio.Extensibility;
@@ -81,8 +82,19 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
                 : await session.OpenAsync(settings, Report, linked.Token);
 
             log($"Dev container is running: {ShortId(result.ContainerId)}, workspace {result.RemoteWorkspaceFolder}, user {result.RemoteUser ?? "(default)"}.");
+
+            // The editor loads the projects with the SDK on Windows, the container builds them with its own.
+            Report("Comparing the SDKs on this computer and in the container");
+            var findings = await SdkAlignment.CheckAsync(new Core.Processes.ProcessRunner(), session.Runtime!, result, configFile.WorkspaceFolder, linked.Token);
+            foreach (var finding in findings)
+            {
+                log($"{finding.Severity switch { SdkSeverity.Error => "Error", SdkSeverity.Warning => "Warning", _ => "Note" }}: {finding.Message}");
+            }
+
+            var important = findings.Where(f => f.Severity != SdkSeverity.Info).Select(f => f.Message).ToList();
             await extensibility.Shell().ShowPromptAsync(
-                $"The dev container is running ({session.Runtime?.Kind}).\n\nYour solution folder is mounted at {result.RemoteWorkspaceFolder}. Use 'Open Container Terminal' for a shell inside it.",
+                $"The dev container is running ({session.Runtime?.Kind}).\n\nYour solution folder is mounted at {result.RemoteWorkspaceFolder}. Use 'Open Container Terminal' for a shell inside it." +
+                (important.Count == 0 ? string.Empty : "\n\n" + string.Join("\n\n", important)),
                 PromptOptions.OK,
                 cancellationToken);
         }

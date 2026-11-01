@@ -70,7 +70,9 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 
 The full log is in the **Dev Containers** pane of the Output window. When something fails, the extension says
 what to do next and offers to fix it when it can (start the engine, open or rebuild the container); see
-[docs/troubleshooting.md](docs/troubleshooting.md).
+[docs/troubleshooting.md](docs/troubleshooting.md). **Open in Container** also checks that the .NET SDK on Windows,
+which IntelliSense uses, and the one in the container can both handle the projects; see
+[docs/intellisense.md](docs/intellisense.md).
 
 Settings are under **Tools > Options > Dev Containers**: container engine (Automatic, Docker or Podman), and
 paths to the engine and the CLI when they are not on PATH. Automatic uses Docker when it is running and falls
