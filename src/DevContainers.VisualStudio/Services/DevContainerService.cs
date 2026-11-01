@@ -5,6 +5,7 @@ using DevContainers.Core.Configuration;
 using DevContainers.Core.Debugging;
 using DevContainers.Core.Diagnostics;
 using DevContainers.Core.Launch;
+using DevContainers.Core.Node;
 using DevContainers.Core.Runtime;
 using DevContainers.Core.Testing;
 using DevContainers.VisualStudio.Settings;
@@ -371,18 +372,137 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
     }
 
     /// <summary>
-    /// The ports of the launch profiles that the solution's "Dev Container" profiles run, which are forwarded with
-    /// <c>forwardPorts</c>.
+    /// Runs a package.json script (npm run) inside the dev container in a console window, as the Run button's
+    /// launcher does for .NET projects. With <paramref name="debug"/>, Node.js starts with its inspector and Visual
+    /// Studio's JavaScript debugger attaches to it through the forwarded port.
     /// </summary>
-    internal async Task<IReadOnlyList<int>> GetLaunchProfilePortsAsync(DevContainerConfigFile configFile, CancellationToken cancellationToken)
+    public async Task RunNpmScriptAsync(bool debug, CancellationToken cancellationToken)
     {
-        var projects = await extensibility.Workspaces().QueryProjectsAsync(project => project.With(p => p.Path), cancellationToken);
-        return projects
-            .Select(p => p.Path)
-            .Where(path => path is not null && IsProjectFile(path) && IsInside(path, configFile.WorkspaceFolder))
-            .SelectMany(path => LaunchProfileSettings.ContainerPorts(Path.GetDirectoryName(path)!))
-            .Distinct()
-            .ToList();
+        var configFile = await this.ResolveConfigAsync(cancellationToken);
+        var solution = (await extensibility.Workspaces().QuerySolutionAsync(s => s.With(x => x.Path), cancellationToken)).FirstOrDefault()?.Path;
+        if (configFile is null)
+        {
+            return;
+        }
+
+        var packages = NpmPackages.Find(configFile.WorkspaceFolder);
+        if (packages.Count == 0)
+        {
+            await extensibility.Shell().ShowPromptAsync(
+                $"No package.json with scripts was found in {configFile.WorkspaceFolder}, the folder the dev container mounts.",
+                PromptOptions.OK,
+                cancellationToken);
+            return;
+        }
+
+        var package = packages[0];
+        if (packages.Count > 1)
+        {
+            var folders = new ChoiceResultCollection<int>();
+            for (var i = 0; i < packages.Count; i++)
+            {
+                folders.Add(packages[i].DisplayName(configFile.WorkspaceFolder), i);
+            }
+
+            var chosenFolder = await extensibility.Shell().ShowPromptAsync(
+                debug ? "Which app should be debugged in the dev container?" : "Which app should run in the dev container?",
+                new PromptOptions<int>(folders, defaultChoiceIndex: 0, dismissedReturns: -1) { Title = "Dev Containers" },
+                cancellationToken);
+            if (chosenFolder < 0)
+            {
+                return;
+            }
+
+            package = packages[chosenFolder];
+        }
+
+        var scripts = package.OrderedScripts();
+        var script = scripts[0];
+        if (scripts.Count > 1)
+        {
+            var choices = new ChoiceResultCollection<int>();
+            for (var i = 0; i < scripts.Count; i++)
+            {
+                choices.Add(scripts[i], i);
+            }
+
+            var chosen = await extensibility.Shell().ShowPromptAsync(
+                $"Which script of {package.DisplayName(configFile.WorkspaceFolder)} should run?",
+                new PromptOptions<int>(choices, defaultChoiceIndex: 0, dismissedReturns: -1) { Title = "Dev Containers" },
+                cancellationToken);
+            if (chosen < 0)
+            {
+                return;
+            }
+
+            script = scripts[chosen];
+        }
+
+        var log = await this.GetLogAsync(cancellationToken);
+        var session = this.sessions.GetOrAdd(configFile.ConfigPath, _ => new DevContainerSession(configFile));
+        this.Current = session;
+        var settings = await this.ReadSettingsAsync(cancellationToken);
+        if (!await prerequisites.EnsureAsync(settings.CliPath, log, cancellationToken))
+        {
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo("powershell.exe")
+            {
+                // A console program started without a console of its own gets a new console window.
+                UseShellExecute = false,
+                CreateNoWindow = false,
+                WorkingDirectory = package.Folder,
+            };
+            string[] arguments =
+            [
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", HostStateSync.WriteScript(),
+                "-WorkspaceFolder", configFile.WorkspaceFolder,
+                "-Config", configFile.ConfigPath,
+                "-Project", package.Folder,
+                "-Npm", script,
+                .. (debug ? new[] { "-InspectPort", NpmPackages.InspectPort.ToString(System.Globalization.CultureInfo.InvariantCulture) } : []),
+            ];
+            foreach (var argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            if (settings.Runtime != ContainerRuntimePreference.Auto)
+            {
+                // The launcher picks the engine the same way the extension's setting does.
+                startInfo.Environment["DEVCONTAINERS_RUNTIME"] = settings.Runtime.ToString().ToLowerInvariant();
+            }
+
+            log($"Running npm script '{script}' of {package.DisplayName(configFile.WorkspaceFolder)} in the dev container" + (debug ? $", with the Node.js inspector on port {NpmPackages.InspectPort}" : string.Empty));
+            Process.Start(startInfo)?.Dispose();
+            if (!debug)
+            {
+                return;
+            }
+
+            var target = $"localhost:{NpmPackages.InspectPort}";
+            // With a folder opened (File > Open > Folder) instead of a solution, Visual Studio reports the folder as its solution.
+            var attached = await VisualStudioAutomation.AttachToNodeInspectorAsync(solution ?? configFile.WorkspaceFolder, target, TimeSpan.FromMinutes(5), cancellationToken);
+            if (attached)
+            {
+                log($"Attached the JavaScript debugger to {target}.");
+                return;
+            }
+
+            await extensibility.Shell().ShowPromptAsync(
+                $"The app runs in the dev container with the Node.js inspector forwarded to {target}, but the debugger could not attach by itself.\n\n" +
+                $"Use Debug > Attach to Process, pick the connection type 'JavaScript and TypeScript (Chrome DevTools/V8 Inspector)', type {target} as the target and attach to the process listed. " +
+                $"A browser works too: open chrome://inspect or edge://inspect.",
+                PromptOptions.OK,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await this.HandleFailureAsync("The npm script could not start in the dev container.", ex, session, ct => this.RunNpmScriptAsync(debug, ct), cancellationToken);
+        }
     }
 
     public void Dispose()

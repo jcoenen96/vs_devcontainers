@@ -6,8 +6,8 @@ using DevContainers.Core.Runtime;
 namespace DevContainers.VisualStudio.Services;
 
 /// <summary>
-/// Forwards the <c>forwardPorts</c> of the open solution's dev container, and the ports of the launch profiles its
-/// "Dev Container" profiles run, to <c>localhost</c> while that container runs, whoever started it: Open in Container, the Run button's launcher, or VS Code. Checks every few seconds,
+/// Forwards the <c>forwardPorts</c> of the open solution's dev container, and the ports that programs in it listen on
+/// (unless <c>portsAttributes</c> says to ignore them), to <c>localhost</c> while that container runs, whoever started it: Open in Container, the Run button's launcher, or VS Code. Checks every few seconds,
 /// and stops forwarding when the container stops or another solution is opened.
 /// </summary>
 internal sealed class PortForwardingService(DevContainerService devContainers) : IDisposable
@@ -16,6 +16,7 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
 
     private readonly SemaphoreSlim gate = new(1, 1);
     private PortForwarder? forwarder;
+    private readonly HashSet<PortSpec> failed = [];
     private string? forwardedKey;
     private ContainerRuntime? runtime;
 
@@ -59,13 +60,19 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
         try
         {
             var configFile = await devContainers.FindCurrentConfigAsync(cancellationToken);
-            var ports = configFile is null
-                ? []
-                : ReadPorts(configFile)
-                    .Concat((await devContainers.GetLaunchProfilePortsAsync(configFile, cancellationToken)).Select(port => new PortSpec("localhost", port)))
-                    .Distinct()
-                    .ToList();
-            if (configFile is null || ports.Count == 0)
+            var config = configFile is null ? null : ReadConfig(configFile);
+            if (configFile is null || config is null)
+            {
+                this.Stop();
+                return;
+            }
+
+            var listed = config.ForwardPorts
+                .Select(p => PortSpec.TryParse(p, out var spec) ? spec : null)
+                .OfType<PortSpec>()
+                .Distinct()
+                .ToList();
+            if (listed.Count == 0 && !config.AutoForwardPorts)
             {
                 this.Stop();
                 return;
@@ -75,34 +82,60 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
             this.runtime ??= await new ContainerRuntimeDetector(new ProcessRunner()).DetectAsync(settings.Runtime, settings.RuntimePath, cancellationToken);
             var engine = new ContainerEngineClient(this.runtime, new ProcessRunner());
             var container = (await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, cancellationToken)).FirstOrDefault(c => c.IsRunning);
+            var log = await devContainers.GetLogAsync(cancellationToken);
             if (container is null)
             {
                 if (this.forwarder is not null)
                 {
                     this.Stop();
-                    (await devContainers.GetLogAsync(cancellationToken))("Stopped forwarding ports: the dev container stopped.");
+                    log("Stopped forwarding ports: the dev container stopped.");
                 }
 
                 return;
             }
 
-            var key = container.Id + "|" + string.Join(",", ports);
-            if (key == this.forwardedKey)
+            if (this.forwarder?.ContainerId != container.Id)
             {
-                return;
+                this.Stop();
+                this.forwarder = new PortForwarder(this.runtime, container.Id, log);
             }
 
-            this.Stop();
-            var log = await devContainers.GetLogAsync(cancellationToken);
-            this.forwarder = new PortForwarder(this.runtime, container.Id, log);
-            this.forwardedKey = key;
-            this.Ports = this.forwarder.Start(ports);
-            foreach (var port in this.Ports)
+            // What listens in the container: ports the app opened (forwarded without being listed, as VS Code does)
+            // and the address each one listens on.
+            var listening = await ContainerPortScanner.ScanAsync(new ProcessRunner(), this.runtime, container.Id, cancellationToken);
+            this.forwarder.SetContainerListeners(listening);
+            var detected = config.AutoForwardPorts
+                ? listening.Select(l => l.Port)
+                    .Where(port => !config.IgnoredPorts.Contains(port) && !listed.Any(p => p.Host == "localhost" && p.Port == port))
+                    .Distinct()
+                    .Select(port => new PortSpec("localhost", port))
+                : [];
+
+            // A port that could not be forwarded (in use on this computer) is not tried again every round, only once
+            // the configuration or the container changes.
+            var key = container.Id + "|" + string.Join(",", listed);
+            if (key != this.forwardedKey)
             {
-                log(port.IsForwarded
-                    ? $"Forwarding port {port.Spec} of the dev container to http://localhost:{port.Spec.Port}"
-                    : $"Not forwarding port {port.Spec}: {port.Problem} (published by appPort or forwarded by VS Code?).");
+                this.forwardedKey = key;
+                this.failed.Clear();
             }
+
+            var wanted = listed.Concat(detected).Where(p => !this.failed.Contains(p)).ToList();
+            foreach (var port in this.forwarder.Update(wanted))
+            {
+                var how = listed.Contains(port.Spec) ? string.Empty : " (detected)";
+                if (port.IsForwarded)
+                {
+                    log($"Forwarding port {port.Spec}{how} of the dev container to http://localhost:{port.Spec.Port}");
+                }
+                else
+                {
+                    this.failed.Add(port.Spec);
+                    log($"Not forwarding port {port.Spec}{how}: {port.Problem} (published by appPort, forwarded by VS Code, or used by a program on Windows?).");
+                }
+            }
+
+            this.Ports = this.forwarder.Forwarded.Select(p => new ForwardedPort(p, true, null)).ToList();
         }
         finally
         {
@@ -116,20 +149,16 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
         this.gate.Dispose();
     }
 
-    private static IReadOnlyList<PortSpec> ReadPorts(DevContainerConfigFile configFile)
+    private static DevContainerConfig? ReadConfig(DevContainerConfigFile configFile)
     {
         try
         {
-            return DevContainerConfig.Load(configFile.ConfigPath).ForwardPorts
-                .Select(p => PortSpec.TryParse(p, out var spec) ? spec : null)
-                .OfType<PortSpec>()
-                .Distinct()
-                .ToList();
+            return DevContainerConfig.Load(configFile.ConfigPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             // Being edited: forwarding pauses until the file parses again.
-            return [];
+            return null;
         }
     }
 
@@ -138,6 +167,7 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
         this.forwarder?.Dispose();
         this.forwarder = null;
         this.forwardedKey = null;
+        this.failed.Clear();
         this.Ports = [];
     }
 }

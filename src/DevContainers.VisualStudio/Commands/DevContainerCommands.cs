@@ -16,6 +16,8 @@ internal static class DevContainerMenu
             MenuChild.Command<OpenInContainerCommand>(),
             MenuChild.Command<StartDebuggingInContainerCommand>(),
             MenuChild.Command<RunTestsInContainerCommand>(),
+            MenuChild.Command<RunNpmScriptInContainerCommand>(),
+            MenuChild.Command<DebugNpmScriptInContainerCommand>(),
             MenuChild.Command<OpenTerminalCommand>(),
             MenuChild.Command<AddLaunchProfileCommand>(),
             MenuChild.Separator,
@@ -55,6 +57,24 @@ internal sealed class RunTestsInContainerCommand(DevContainerService service) : 
 
     public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
         service.RunTestsAsync(cancellationToken);
+}
+
+[VisualStudioContribution]
+internal sealed class RunNpmScriptInContainerCommand(DevContainerService service) : Command
+{
+    public override CommandConfiguration CommandConfiguration => new("%DevContainers.RunNpm.DisplayName%");
+
+    public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
+        service.RunNpmScriptAsync(debug: false, cancellationToken);
+}
+
+[VisualStudioContribution]
+internal sealed class DebugNpmScriptInContainerCommand(DevContainerService service) : Command
+{
+    public override CommandConfiguration CommandConfiguration => new("%DevContainers.DebugNpm.DisplayName%");
+
+    public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
+        service.RunNpmScriptAsync(debug: true, cancellationToken);
 }
 
 [VisualStudioContribution]

@@ -38,6 +38,7 @@ tests/DevContainers.VisualStudio.UITests   Drives a real Visual Studio end to en
 docs/                            How the extension works
 samples/dotnet-console           A small solution with a .devcontainer to try it on
 samples/dotnet-webapi            A Web API with a .devcontainer, to test reaching the app in the container from the host
+samples/typescript-node          A TypeScript server with a .devcontainer, for the npm script commands
 ```
 
 ## Using it
@@ -59,6 +60,8 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 | Open in Container | Starts the folder's container, reusing the one VS Code uses if there is one, and builds it only when there is none. Asks which config to use when there are several. |
 | Start Debugging in Container | Builds a .NET project in the container and starts it under Visual Studio's debugger, which runs in the container too. See [docs/debugging.md](docs/debugging.md). |
 | Run Tests in Container | Runs `dotnet test` for the solution inside the container, with the output in the Output window. |
+| Run npm Script in Container | Runs a `package.json` script (such as `dev` or `start`) of a TypeScript or Node.js app inside the container, in its own window. See [docs/typescript.md](docs/typescript.md). |
+| Debug npm Script in Container | The same with the Node.js inspector on, and attaches Visual Studio's JavaScript debugger to it. |
 | Open Container Terminal | Opens a shell inside the running container, with the container's `remoteEnv` and user. |
 | Add Run Profile for Dev Container | Adds a **Dev Container** launch profile to a project, so the Run button builds and runs it inside the container. See [docs/run-in-dev-container.md](docs/run-in-dev-container.md). |
 | Rebuild Container | Removes the container and creates it again from the current config. Asks first when VS Code has it open. |
@@ -150,7 +153,7 @@ CI runs the tests against both Docker and Podman and builds the VSIX on every pu
    terminal, output log.
 2. **.NET inner loop:** the Run button builds and runs the project inside the container through a launch profile
    (done), and Visual Studio's debugger debugs it there (done).
-3. **TypeScript inner loop:** run TypeScript and Node.js apps (their npm scripts) inside the container from the Run
-   button, and attach Visual Studio's JavaScript debugger to them.
+3. **TypeScript inner loop** (done): run TypeScript and Node.js apps (their npm scripts) inside the container,
+   attach Visual Studio's JavaScript debugger to them, and forward the ports they open.
 4. **Parity and Marketplace:** a `customizations.visualstudio` section, Marketplace packaging.
    The CLI stays a separate install; the extension never bundles it.

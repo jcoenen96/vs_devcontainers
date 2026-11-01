@@ -33,6 +33,15 @@
 
 .PARAMETER AppArgs
     Arguments passed to the app.
+
+.PARAMETER Npm
+    For a Node.js or TypeScript app: the script of package.json to run in the container, such as dev or start.
+    -Project is then the folder with package.json. The packages are installed in the container first when
+    node_modules is missing or older than the lock file.
+
+.PARAMETER InspectPort
+    With -Npm: start Node.js with --inspect on this port of the container, so a debugger can attach to it
+    through the forwarded port.
 #>
 [CmdletBinding()]
 param(
@@ -40,6 +49,10 @@ param(
     [string] $Project = '',
     [string] $Config = '',
     [string[]] $AppArgs = @(),
+    # A Node.js or TypeScript app: the package.json script to run (npm run <Npm>) instead of dotnet run.
+    [string] $Npm = '',
+    # With -Npm: start Node.js with its inspector on this port (0 = off), for attaching a debugger.
+    [int] $InspectPort = 0,
     # Used by the extension: copy this computer's settings into a running container, then exit.
     [switch] $SyncOnly,
     [string] $EnginePath = '',
@@ -60,6 +73,8 @@ if ($PSVersionTable.PSEdition -eq 'Desktop' -and $env:PSModulePath) {
 if ($env:DEVCONTAINERS_RUN_LOG) { Start-Transcript -Path $env:DEVCONTAINERS_RUN_LOG -Append | Out-Null }
 $onWindows = $env:OS -eq 'Windows_NT'
 $workspace = Split-Path -Parent $PSScriptRoot
+# The extension runs a copy of this script from a temporary folder and says which folder the container mounts.
+if ($WorkspaceFolder) { $workspace = $WorkspaceFolder.TrimEnd('\', '/') }
 $configFile = if ($Config) { $Config } else { Join-Path $PSScriptRoot 'devcontainer.json' }
 
 function Write-Step([string] $text) {
@@ -332,6 +347,16 @@ function Get-HostNuGetConfig {
     return [System.Text.Encoding]::UTF8.GetBytes($xml.OuterXml)
 }
 
+function Get-HostNpmConfig {
+    # The user's .npmrc: registries and their tokens. Settings with Windows paths (prefix, cache, a script shell)
+    # mean nothing in the container and are left out.
+    $file = Join-Path $HOME '.npmrc'
+    if (-not (Test-Path $file)) { return $null }
+    $lines = Get-Content $file | Where-Object { $_ -notmatch '^\s*(prefix|cache|script-shell|userconfig|globalconfig|tmp)\s*=' -and $_ -notmatch '=\s*[A-Za-z]:\\' }
+    if (-not $lines) { return $null }
+    return [System.Text.Encoding]::UTF8.GetBytes(($lines -join "`n") + "`n")
+}
+
 function Get-HostDevCertificate {
     # The ASP.NET Core HTTPS development certificate Windows trusts ('dotnet dev-certs https --trust'), identified
     # by its marker extension. Only Windows keeps it in a certificate store PowerShell can read.
@@ -412,6 +437,12 @@ function Sync-HostState([string] $containerId, [string] $user, [switch] $NoProje
     if ($nuget) {
         $files += , @('.nuget/NuGet/NuGet.Config', $nuget)
         Write-Step 'Copying your NuGet.Config (feeds and credentials) into the container'
+    }
+
+    $npmrc = Get-HostNpmConfig
+    if ($npmrc) {
+        $files += , @('.npmrc', $npmrc)
+        Write-Step 'Copying your .npmrc (registries and tokens) into the container'
     }
 
     $certificate = Get-HostDevCertificate
@@ -514,6 +545,43 @@ $startLock.ReleaseMutex()
 $pidFile = '/tmp/vs-run-' + (($relativeProject -replace '[^A-Za-z0-9_.-]', '_').Trim('.')) + '.pid'
 $stopPrevious = "if [ -f $pidFile ]; then kill -TERM -`$(cat $pidFile) 2>/dev/null && sleep 1; rm -f $pidFile; fi; true"
 Invoke-DevContainer (@('exec') + $common + @('sh', '-c', $stopPrevious)) | Out-Null
+
+if ($Npm) {
+    # A Node.js or TypeScript app. node_modules is installed by the container's npm, for Linux: packages with native
+    # code (esbuild, sharp, ...) installed on Windows do not run there. When devcontainer.json mounts a volume on
+    # node_modules (recommended, see docs/typescript.md), the engine creates it as root; hand it to the user first.
+    $folder = "'" + $relativeProject + "'"
+    $user = if ($up.remoteUser) { $up.remoteUser } else { 'root' }
+    $remoteFolder = ConvertTo-ShellLiteral (($up.remoteWorkspaceFolder.TrimEnd('/') + '/' + $relativeProject) -replace '/\.$', '')
+    & $engine exec -u root $up.containerId sh -c "cd $remoteFolder 2>/dev/null && [ -d node_modules ] && find node_modules -maxdepth 0 -user root ! -user $user -exec chown $user {} +; true" | Out-Null
+
+    $install = 'command -v npm >/dev/null 2>&1 || { echo [dev container] Node.js is not installed in the container. Add the feature ghcr.io/devcontainers/features/node:1 to devcontainer.json, or use a Node.js image, and rebuild the container. >&2; exit 127; }; ' +
+        'if [ -f pnpm-lock.yaml ]; then i=''corepack pnpm install --frozen-lockfile''; elif [ -f yarn.lock ]; then i=''corepack yarn install --immutable''; elif [ -f package-lock.json ]; then i=''npm ci''; else i=''npm install''; fi; ' +
+        'm=node_modules/.package-lock.json; [ -f node_modules/.modules.yaml ] && m=node_modules/.modules.yaml; [ -f node_modules/.yarn-state.yml ] && m=node_modules/.yarn-state.yml; ' +
+        'if [ ! -f $m ] || [ package.json -nt $m ] || { [ -f package-lock.json ] && [ package-lock.json -nt $m ]; }; then echo [dev container] Installing packages in the container: $i; $i || exit $?; fi'
+
+    if ($InspectPort -gt 0) {
+        # Without npm in between: npm is a Node.js program too and would take the inspector port itself.
+        $scripts = (Get-Content -Raw (Join-Path $projectPath 'package.json') | ConvertFrom-Json).scripts
+        $command = $scripts.PSObject.Properties | Where-Object { $_.Name -eq $Npm } | Select-Object -First 1
+        if (-not $command) { Stop-WithError "package.json has no script named '$Npm'." }
+        # The pre script (a build step such as 'tsc', as npm would run it) runs first, without the inspector: the
+        # debugger would otherwise attach to the compiler.
+        $run = 'export PATH=$PWD/node_modules/.bin:$PATH; '
+        $pre = $scripts.PSObject.Properties | Where-Object { $_.Name -eq ('pre' + $Npm) } | Select-Object -First 1
+        if ($pre) { $run += 'sh -c ' + (ConvertTo-ShellLiteral $pre.Value) + ' || exit $?; ' }
+        $run += 'export NODE_OPTIONS=--inspect=0.0.0.0:' + $InspectPort + '; exec sh -c ' + (ConvertTo-ShellLiteral $command.Value)
+        Write-Step "Running in the container: npm script '$Npm' of $relativeProject, with the Node.js inspector on port $InspectPort"
+    } else {
+        $run = 'exec npm run ' + (ConvertTo-ShellLiteral $Npm)
+        if ($AppArgs.Count -gt 0) { $run += ' -- ' + (($AppArgs | ForEach-Object { ConvertTo-ShellLiteral $_ }) -join ' ') }
+        Write-Step "Running in the container: npm run $Npm in $relativeProject"
+    }
+
+    # HOST: dev servers that read it (Create React App, Nuxt and others) listen on every interface of the container.
+    Invoke-DevContainer (@('exec') + $common + @('setsid', '-w', 'sh', '-c', "echo `$`$ > $pidFile; cd $folder || exit 1; export HOST=0.0.0.0; $install; $run"))
+    exit $LASTEXITCODE
+}
 
 # Build into the container's own file system, not obj/ and bin/ in the mounted folder: Windows bind mounts (Podman and
 # Docker through WSL) do not let the container user set file times there, which fails the build (MSB3374), and

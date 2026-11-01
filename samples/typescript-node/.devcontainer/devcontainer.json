@@ -1,0 +1,15 @@
+// A TypeScript (Node.js) dev container for trying the extension.
+{
+  "name": "typescript-node",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  // node_modules lives in a volume of the container, not in the folder from Windows: packages are installed for
+  // Linux, installs are much faster than through a Windows bind mount, and npm on Windows keeps its own copy.
+  "mounts": [
+    "source=hello-node-node_modules,target=${containerWorkspaceFolder}/node_modules,type=volume"
+  ],
+  // Ports the app opens are forwarded when detected; listing them forwards them as soon as the container runs.
+  "forwardPorts": [3000],
+  "customizations": {
+    "visualstudio": {}
+  }
+}

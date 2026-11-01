@@ -88,6 +88,27 @@ jobs:
           done
           cat "$RUNNER_TEMP/blazor.log"
           grep -q "<title>Home</title>" "$RUNNER_TEMP/blazor.html"
+      - name: Run and debug the TypeScript sample's npm scripts
+        working-directory: samples/typescript-node
+        run: |
+          # The inspector mode runs the predev script (tsc) without the inspector, then the server with it.
+          nohup pwsh -NoProfile -File .devcontainer/vs-run.ps1 -Npm dev -InspectPort 9229 > "$RUNNER_TEMP/node.log" 2>&1 &
+          for i in $(seq 1 150); do
+            id=$(docker ps -q --filter "label=devcontainer.local_folder=$PWD" | head -n 1)
+            if [ -n "$id" ] && docker exec "$id" curl -sf http://localhost:3000/api/info > "$RUNNER_TEMP/node.json"; then break; fi
+            sleep 4
+          done
+          cat "$RUNNER_TEMP/node.log"
+          cat "$RUNNER_TEMP/node.json"
+          grep -q '"inContainer":true' "$RUNNER_TEMP/node.json"
+          grep -q '"inspector":"ws://0.0.0.0:9229/' "$RUNNER_TEMP/node.json"
+          # node_modules was installed by the container's npm, into the volume, not into the folder from the host.
+          test -z "$(ls -A node_modules 2>/dev/null)"
+          docker exec "$id" test -x node_modules/.bin/tsc
+          # What the extension's port detection reads: both the app and the inspector listen.
+          docker exec "$id" cat /proc/net/tcp /proc/net/tcp6 | awk '$4 == "0A" { print $2 }' | tee "$RUNNER_TEMP/listen.txt"
+          grep -q ':0BB8$' "$RUNNER_TEMP/listen.txt"
+          grep -q ':240D$' "$RUNNER_TEMP/listen.txt"
 
   vsix:
     name: Build VSIX

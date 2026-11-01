@@ -42,6 +42,29 @@ public class ForwardingTests
         Assert.Contains("already in use", result.Problem);
     }
 
+    [Fact]
+    public void Update_StartsNewPortsAndStopsOldOnes()
+    {
+        static int FreePort()
+        {
+            using var probe = new TcpListener(IPAddress.Loopback, 0);
+            probe.Start();
+            return ((IPEndPoint)probe.LocalEndpoint).Port;
+        }
+
+        var (a, b) = (new PortSpec("localhost", FreePort()), new PortSpec("localhost", FreePort()));
+        using var forwarder = new PortForwarder(new ContainerRuntime(ContainerRuntimeKind.Docker, "docker", "27.0"), "abc", _ => { });
+
+        Assert.Single(forwarder.Update([a]), r => r.IsForwarded);
+        Assert.Single(forwarder.Update([a, b]), r => r.Spec == b && r.IsForwarded);
+        Assert.Empty(forwarder.Update([b]));
+        Assert.Equal([b], forwarder.Forwarded);
+
+        // The stopped port is free again on this computer.
+        using var again = new TcpListener(IPAddress.Loopback, a.Port);
+        again.Start();
+    }
+
     /// <summary>
     /// Forwards port 8080 of real containers: Alpine (BusyBox nc as the relay) and Debian (bash). Runs only with
     /// DEVCONTAINERS_INTEGRATION=1.
