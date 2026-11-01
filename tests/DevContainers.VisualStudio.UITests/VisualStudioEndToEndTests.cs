@@ -99,14 +99,27 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
                 Assert.Single(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default)).IsRunning,
                 "The container stopped together with the app.");
 
-            // 5. Extensions > Dev Containers > Stop Container stops it.
+            // 5. Extensions > Dev Containers > Start Debugging in Container builds the app in the container and starts
+            // it under Visual Studio's debugger, which runs in the container too (vsdbg through exec).
+            // The previous run still answers (closing its window leaves the app running in the container, by
+            // design); the command stops it first, so wait for an answer from the debugged run.
+            vs.ClickMenu("Extensions", "Dev Containers", "Start Debugging in Container");
+            var debugged = await WaitForApiAsync(TimeSpan.FromMinutes(10), vs, body => body.Contains("\"debuggerAttached\":true", StringComparison.Ordinal));
+            vs.Screenshot("05-debugging");
+            this.Log("GET /api/info under the debugger: " + debugged);
+            Assert.Contains("\"inContainer\":true", debugged);
+            Assert.Contains("\"debuggerAttached\":true", debugged);
+            vs.ClickMenu("Debug", "Stop Debugging");
+            await WaitUntilAsync(async () => !await IsApiAnsweringAsync(), TimeSpan.FromMinutes(1), "the debugged app to stop", vs);
+
+            // 6. Extensions > Dev Containers > Stop Container stops it.
             vs.ClickMenu("Extensions", "Dev Containers", "Stop Container");
             await WaitUntilAsync(
                 async () => !(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default)).Any(c => c.IsRunning),
                 TimeSpan.FromMinutes(2),
                 "the container to stop",
                 vs);
-            vs.Screenshot("05-container-stopped");
+            vs.Screenshot("06-container-stopped");
         }
         catch
         {
@@ -124,7 +137,7 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
         }
     }
 
-    private static async Task<string> WaitForApiAsync(TimeSpan timeout, VisualStudioDriver vs)
+    private static async Task<string> WaitForApiAsync(TimeSpan timeout, VisualStudioDriver vs, Func<string, bool>? accept = null)
     {
         string? body = null;
         await WaitUntilAsync(
@@ -133,7 +146,7 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
                 try
                 {
                     body = await Http.GetStringAsync("http://localhost:5080/api/info");
-                    return true;
+                    return accept is null || accept(body);
                 }
                 catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {

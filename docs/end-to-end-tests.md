@@ -15,7 +15,9 @@ with the extension installed from its `.vsix`, against real Linux containers. Th
    extension's port forwarding, until it answers with `"inContainer":true`, and checks that the app runs in the
    same container.
 4. Closes the launcher's console window, like stopping the app, and checks that the container keeps running.
-5. **Extensions > Dev Containers > Stop Container**, and checks that the container stops.
+5. **Extensions > Dev Containers > Start Debugging in Container**, then checks that `/api/info` answers with
+   `"debuggerAttached":true` (the app runs under Visual Studio's debugger in the container), and stops debugging.
+6. **Extensions > Dev Containers > Stop Container**, and checks that the container stops.
 
 Screenshots of every step, Visual Studio's `ActivityLog.xml`, the extension host logs and the installer logs are
 uploaded as the `e2e-windows` artifact of the workflow run, also when the test fails.

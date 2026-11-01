@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using DevContainers.Core;
 using DevContainers.Core.Configuration;
+using DevContainers.Core.Debugging;
 using DevContainers.Core.Launch;
 using DevContainers.Core.Runtime;
 using DevContainers.VisualStudio.Settings;
@@ -168,58 +169,22 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
             return;
         }
 
-        var workspace = Path.GetFullPath(configFile.WorkspaceFolder) + Path.DirectorySeparatorChar;
-        var projects = await extensibility.Workspaces().QueryProjectsAsync(
-            project => project.With(p => p.Name).With(p => p.Path),
-            cancellationToken);
-        var candidates = projects
-            .Where(p => p.Path is { } path
-                && path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
-                && Path.GetFullPath(path).StartsWith(workspace, StringComparison.OrdinalIgnoreCase))
-            .Select(p => (Name: p.Name ?? Path.GetFileNameWithoutExtension(p.Path!), Path: p.Path!))
-            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (candidates.Count == 0)
+        var chosen = await this.ChooseProjectAsync(configFile, "Which project should the Run button start in the dev container?", preferLaunchProfile: false, cancellationToken);
+        if (chosen is null)
         {
-            await extensibility.Shell().ShowPromptAsync(
-                $"No C# project of this solution is inside {configFile.WorkspaceFolder}, the folder the dev container mounts.",
-                PromptOptions.OK,
-                cancellationToken);
             return;
-        }
-
-        var chosen = candidates[0];
-        if (candidates.Count > 1)
-        {
-            var choices = new ChoiceResultCollection<int>();
-            for (var i = 0; i < candidates.Count; i++)
-            {
-                choices.Add(candidates[i].Name, i);
-            }
-
-            var index = await extensibility.Shell().ShowPromptAsync(
-                "Which project should the Run button start in the dev container?",
-                new PromptOptions<int>(choices, defaultChoiceIndex: 0, dismissedReturns: -1) { Title = "Dev Containers" },
-                cancellationToken);
-            if (index < 0)
-            {
-                return;
-            }
-
-            chosen = candidates[index];
         }
 
         var log = await this.GetLogAsync(cancellationToken);
         try
         {
-            var result = DevContainerLaunchProfile.Install(chosen.Path, configFile);
+            var result = DevContainerLaunchProfile.Install(chosen.Value.Path, configFile);
             log($"Added the '{DevContainerLaunchProfile.ProfileName}' launch profile to {result.LaunchSettingsPath}" +
                 (result.InnerLaunchProfile is null ? "." : $", running the '{result.InnerLaunchProfile}' profile inside the container."));
             log($"Wrote the launcher script {result.ScriptPath}.");
 
             await extensibility.Shell().ShowPromptAsync(
-                $"{chosen.Name} now has a '{DevContainerLaunchProfile.ProfileName}' launch profile.\n\n" +
+                $"{chosen.Value.Name} now has a '{DevContainerLaunchProfile.ProfileName}' launch profile.\n\n" +
                 $"Pick '{DevContainerLaunchProfile.ProfileName}' in the list next to the Run button and start the project: it builds and runs inside the dev container.\n\n" +
                 "Commit Properties/launchSettings.json and .devcontainer/vs-run.ps1, so the profile works for everyone right after cloning.",
                 PromptOptions.OK,
@@ -228,6 +193,79 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
         {
             await this.ReportFailureAsync("The launch profile could not be added.", ex.Message, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Starts the project under the debugger inside the dev container: opens the container, installs the .NET
+    /// debugger there, builds the project in the container and hands Visual Studio a debug session that runs
+    /// vsdbg through docker/podman exec. Breakpoints in the solution's files bind as usual.
+    /// </summary>
+    public async Task DebugAsync(CancellationToken cancellationToken)
+    {
+        var configFile = await this.ResolveConfigAsync(cancellationToken);
+        if (configFile is null)
+        {
+            return;
+        }
+
+        var project = await this.ChooseProjectAsync(configFile, "Which project should be debugged in the dev container?", preferLaunchProfile: true, cancellationToken);
+        var solution = (await extensibility.Workspaces().QuerySolutionAsync(s => s.With(x => x.Path), cancellationToken)).FirstOrDefault()?.Path;
+        if (project is null || solution is null)
+        {
+            return;
+        }
+
+        var session = this.sessions.GetOrAdd(configFile.ConfigPath, _ => new DevContainerSession(configFile));
+        this.Current = session;
+        var settings = await this.ReadSettingsAsync(cancellationToken);
+        var log = await this.GetLogAsync(cancellationToken);
+        log($"Debugging {project.Value.Name} in the dev container from {configFile.ConfigPath}");
+        if (!await prerequisites.EnsureAsync(settings.CliPath, log, cancellationToken))
+        {
+            return;
+        }
+
+        using var progress = await extensibility.Shell().StartProgressReportingAsync(
+            $"Starting {project.Value.Name} in the dev container",
+            new ProgressReporterOptions(isWorkCancellable: true),
+            cancellationToken);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, progress.CancellationToken);
+
+        void Report(string line)
+        {
+            log(line);
+            progress.Report(new ProgressStatus(percentComplete: null, Truncate(line, 120)));
+        }
+
+        try
+        {
+            var up = await session.OpenAsync(settings, Report, linked.Token);
+            var projectFolder = Path.GetDirectoryName(project.Value.Path)!;
+            var runner = new Core.Processes.ProcessRunner();
+            await HostStateSync.RunAsync(runner, session.Runtime!, up, configFile.WorkspaceFolder, Report, linked.Token, projectFolder);
+
+            var debugger = new ContainerDebugger(runner, session.Runtime!, up);
+            var relative = Path.GetRelativePath(configFile.WorkspaceFolder, projectFolder).Replace('\\', '/');
+            await debugger.StopLauncherRunAsync(relative == "." ? "." : relative, linked.Token);
+            var vsdbg = await debugger.EnsureDebuggerAsync(Report, linked.Token);
+            var profile = LaunchProfileSettings.Read(projectFolder, LaunchProfileSettings.InnerProfileName(projectFolder));
+            var target = await debugger.BuildAsync(ContainerDebugger.ToContainerPath(configFile.WorkspaceFolder, up.RemoteWorkspaceFolder, projectFolder), profile, Report, linked.Token);
+
+            var launchJson = Path.Combine(Path.GetTempPath(), "vs-devcontainers", $"launch-{project.Value.Name}.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(launchJson)!);
+            await File.WriteAllTextAsync(launchJson, debugger.CreateLaunchJson(vsdbg, target, configFile.WorkspaceFolder, $"{project.Value.Name} (dev container)"), linked.Token);
+
+            log($"Starting the debugger: {target.Program}" + (profile is null ? string.Empty : $" with the '{profile.Name}' profile's settings"));
+            await VisualStudioAutomation.ExecuteCommandAsync(solution, "DebugAdapterHost.Launch", $"/LaunchJson:\"{launchJson}\" /EngineGuid:{ContainerDebugger.CoreClrEngineGuid}", linked.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            log("Cancelled.");
+        }
+        catch (Exception ex)
+        {
+            await this.ReportFailureAsync("Debugging in the dev container could not start.", ex is InvalidOperationException ? ex.Message : session.LastError ?? ex.Message, cancellationToken);
         }
     }
 
@@ -277,6 +315,61 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         return current is not null && found.Any(f => string.Equals(f.ConfigPath, current.ConfigPath, StringComparison.OrdinalIgnoreCase))
             ? current
             : found.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Picks a C# project inside the dev container's folder: the only one, else (with
+    /// <paramref name="preferLaunchProfile"/>) the only one with a "Dev Container" launch profile, else asks.
+    /// </summary>
+    private async Task<(string Name, string Path)?> ChooseProjectAsync(DevContainerConfigFile configFile, string question, bool preferLaunchProfile, CancellationToken cancellationToken)
+    {
+        // The workspace folder can end in a separator (the solution folder does); add exactly one.
+        var workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(configFile.WorkspaceFolder)) + Path.DirectorySeparatorChar;
+        var projects = await extensibility.Workspaces().QueryProjectsAsync(
+            project => project.With(p => p.Name).With(p => p.Path),
+            cancellationToken);
+        var candidates = projects
+            .Where(p => p.Path is { } path
+                && path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                && Path.GetFullPath(path).StartsWith(workspace, StringComparison.OrdinalIgnoreCase))
+            .Select(p => (Name: p.Name ?? Path.GetFileNameWithoutExtension(p.Path!), Path: p.Path!))
+            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            await extensibility.Shell().ShowPromptAsync(
+                $"No C# project of this solution is inside {configFile.WorkspaceFolder}, the folder the dev container mounts.",
+                PromptOptions.OK,
+                cancellationToken);
+            return null;
+        }
+
+        if (preferLaunchProfile && candidates.Count > 1)
+        {
+            var withProfile = candidates.Where(c => LaunchProfileSettings.Read(System.IO.Path.GetDirectoryName(c.Path)!, DevContainerLaunchProfile.ProfileName) is not null).ToList();
+            if (withProfile.Count == 1)
+            {
+                return withProfile[0];
+            }
+        }
+
+        if (candidates.Count == 1)
+        {
+            return candidates[0];
+        }
+
+        var choices = new ChoiceResultCollection<int>();
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            choices.Add(candidates[i].Name, i);
+        }
+
+        var index = await extensibility.Shell().ShowPromptAsync(
+            question,
+            new PromptOptions<int>(choices, defaultChoiceIndex: 0, dismissedReturns: -1) { Title = "Dev Containers" },
+            cancellationToken);
+        return index < 0 ? null : candidates[index];
     }
 
     private async Task<DevContainerConfigFile?> ResolveConfigAsync(CancellationToken cancellationToken)
