@@ -101,9 +101,10 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
 
             // 5. Extensions > Dev Containers > Start Debugging in Container builds the app in the container and starts
             // it under Visual Studio's debugger, which runs in the container too (vsdbg through exec).
-            await WaitUntilAsync(async () => !await IsApiAnsweringAsync(), TimeSpan.FromMinutes(1), "the previous run to stop answering", vs);
+            // The previous run still answers (closing its window leaves the app running in the container, by
+            // design); the command stops it first, so wait for an answer from the debugged run.
             vs.ClickMenu("Extensions", "Dev Containers", "Start Debugging in Container");
-            var debugged = await WaitForApiAsync(TimeSpan.FromMinutes(10), vs);
+            var debugged = await WaitForApiAsync(TimeSpan.FromMinutes(10), vs, body => body.Contains("\"debuggerAttached\":true", StringComparison.Ordinal));
             vs.Screenshot("05-debugging");
             this.Log("GET /api/info under the debugger: " + debugged);
             Assert.Contains("\"inContainer\":true", debugged);
@@ -136,7 +137,7 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
         }
     }
 
-    private static async Task<string> WaitForApiAsync(TimeSpan timeout, VisualStudioDriver vs)
+    private static async Task<string> WaitForApiAsync(TimeSpan timeout, VisualStudioDriver vs, Func<string, bool>? accept = null)
     {
         string? body = null;
         await WaitUntilAsync(
@@ -145,7 +146,7 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
                 try
                 {
                     body = await Http.GetStringAsync("http://localhost:5080/api/info");
-                    return true;
+                    return accept is null || accept(body);
                 }
                 catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
