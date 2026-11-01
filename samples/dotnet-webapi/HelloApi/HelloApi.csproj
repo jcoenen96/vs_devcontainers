@@ -4,6 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- dotnet user-secrets works on Windows and, copied by the launcher, in the dev container. -->
+    <UserSecretsId>helloapi-devcontainers-sample</UserSecretsId>
   </PropertyGroup>
 
 </Project>

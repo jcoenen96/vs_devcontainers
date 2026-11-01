@@ -29,7 +29,7 @@ For the sample API it looks like this:
 "Dev Container": {
   "commandName": "Executable",
   "executablePath": "powershell.exe",
-  "commandLineArgs": "-NoProfile -ExecutionPolicy Bypass -File \"$(ProjectDir)..\\.devcontainer\\vs-run.ps1\" -LaunchProfile \"http\"",
+  "commandLineArgs": "-NoProfile -ExecutionPolicy Bypass -File \"$(ProjectDir)..\\.devcontainer\\vs-run.ps1\" -LaunchProfile \"https\"",
   "workingDirectory": "$(ProjectDir)"
 }
 ```
@@ -37,7 +37,7 @@ For the sample API it looks like this:
 - `commandName: Executable` makes Visual Studio start a program instead of the project itself.
 - `$(ProjectDir)` is expanded by Visual Studio to the project folder, so the paths work wherever the repository
   is cloned.
-- `-LaunchProfile "http"` names a regular profile of the project (`commandName: Project`) that `dotnet run` uses
+- `-LaunchProfile "https"` names a regular profile of the project (`commandName: Project`) that `dotnet run` uses
   **inside** the container, for its URL and environment variables. The command picks the first such profile;
   without one, `dotnet run` runs without a profile.
 - `-Config` is added when the configuration is not `.devcontainer/devcontainer.json`, for example
@@ -59,15 +59,31 @@ Windows) and PowerShell 7.
    folder's existing container, including one VS Code created, and reuses it (`Reusing the existing dev container
    of this folder`). Only when there is none does it build the image and create the container. The build log
    shows in the window.
-4. **Stop the previous run.** Stopping the app in Visual Studio closes the window on Windows, but the app inside
+4. **Copy what the app needs from Windows** into the container user's home folder (details below): the
+   project's user secrets, your NuGet.Config, and the HTTPS development certificate.
+5. **Stop the previous run.** Stopping the app in Visual Studio closes the window on Windows, but the app inside
    the container keeps running and would hold its port. Each run records its process group in
    `/tmp/vs-run-<project>.pid` inside the container; the next run stops that group first.
-5. **Run the project** inside the container with `devcontainer exec`, as the container's user and with its
+6. **Run the project** inside the container with `devcontainer exec`, as the container's user and with its
    environment: `dotnet run --project <project> --launch-profile <profile>`. The output shows in the window, and
    the window's exit code is the app's. The build output goes to `~/.vs-devcontainer/build` inside the container
    (MSBuild's artifacts output), not to `obj/` and `bin/` in your folder: Windows bind mounts (Podman, and Docker
    through WSL) do not let the container's user set file times there, which fails the build with MSB3374, and the
    host's Visual Studio builds use those folders too.
+
+## What is copied from Windows
+
+The app should run in the container as it does on Windows, so the launcher copies three things in on every run.
+They are copied, not mounted, so the container keeps working when Windows changes them, and the next run copies
+the latest version.
+
+| What | From (Windows) | To (container) | Notes |
+| --- | --- | --- | --- |
+| User secrets | `%APPDATA%\Microsoft\UserSecrets\<UserSecretsId>\secrets.json` | `~/.microsoft/usersecrets/<UserSecretsId>/secrets.json` | Only for a project with a `UserSecretsId`. Secrets set inside the container are replaced on the next run; set them on Windows. |
+| NuGet feeds and credentials | `%APPDATA%\NuGet\NuGet.Config` | `~/.nuget/NuGet/NuGet.Config` | Local and network folder feeds and Windows paths are left out. Passwords that Windows encrypted cannot be read on Linux and are left out with a message; use `ClearTextPassword` with a personal access token, or a credential provider in the image. |
+| HTTPS development certificate | The certificate `dotnet dev-certs https --trust` made, in `Cert:\CurrentUser\My` | The container user's certificate store, with `dotnet dev-certs https --clean --import` | Kestrel serves HTTPS with the certificate Windows already trusts, so browsers on Windows accept `https://localhost:<port>` without a warning. Imported only when the container does not have it yet. |
+
+Each file is readable by the container user only (`chmod 600`). Nothing is written into your project folder.
 
 ## Stopping the app keeps the container
 

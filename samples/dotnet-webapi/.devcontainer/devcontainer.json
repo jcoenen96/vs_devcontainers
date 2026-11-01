@@ -10,9 +10,10 @@
   },
   // Visual Studio (with the extension) and VS Code forward these ports to localhost while the container runs. Unlike
   // appPort, nothing is published when the container is created, so the list can change without a rebuild.
-  "forwardPorts": [5080],
+  "forwardPorts": [5080, 5443],
   "portsAttributes": {
-    "5080": { "label": "HelloApi" }
+    "5080": { "label": "HelloApi" },
+    "5443": { "label": "HelloApi (HTTPS)" }
   },
   "postCreateCommand": "dotnet restore HelloApi.slnx",
   "customizations": {
