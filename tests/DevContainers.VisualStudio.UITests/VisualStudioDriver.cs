@@ -116,6 +116,8 @@ internal sealed class VisualStudioDriver : IDisposable
         {
             try
             {
+                // The first-run dialogs come first, and UI Automation can fail while they come and go.
+                this.DismissKnownDialogs();
                 var dte = FindDte(this.process.Id);
                 if (dte is not null)
                 {
@@ -135,7 +137,6 @@ internal sealed class VisualStudioDriver : IDisposable
                 last = ex;
             }
 
-            this.DismissKnownDialogs();
             Thread.Sleep(3000);
         }
 
