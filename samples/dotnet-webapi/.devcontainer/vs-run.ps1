@@ -228,6 +228,7 @@ function Get-ProblemAdvice([string] $text) {
         'tls handshake timeout|dial tcp|i/o timeout|no such host|temporary failure in name resolution|ENOTFOUND|ETIMEDOUT' { return 'The engine could not reach the network. Check the connection, a proxy or VPN, then run again.' }
         'failed to (solve|build)|error building image|executor failed running' { return 'Building the image failed; the failing step is above. Fix the Dockerfile or feature and run again.' }
         'postCreateCommand|postStartCommand|onCreateCommand|updateContentCommand' { return 'A lifecycle command of devcontainer.json failed; its output is above.' }
+        'NETSDK1045|does not support targeting \.NET|A compatible \.NET SDK was not found' { return "The container's .NET SDK does not match the project's target framework or global.json. Use an image with that .NET version, or set the dotnet feature's version in devcontainer.json, and rebuild the container." }
     }
     return $null
 }
@@ -581,6 +582,27 @@ if ($Npm) {
     # HOST: dev servers that read it (Create React App, Nuxt and others) listen on every interface of the container.
     Invoke-DevContainer (@('exec') + $common + @('setsid', '-w', 'sh', '-c', "echo `$`$ > $pidFile; cd $folder || exit 1; export HOST=0.0.0.0; $install; $run"))
     exit $LASTEXITCODE
+}
+
+# The container's .NET SDK has to build the project's target framework. Say what to change before the build fails
+# with NETSDK1045, which does not say what to do in a dev container.
+$projectFile = Get-ChildItem -LiteralPath $projectPath -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.csproj', '.fsproj', '.vbproj' } | Select-Object -First 1
+if ($projectFile) {
+    $majors = @([regex]::Matches((Get-Content -Raw $projectFile.FullName), '<TargetFrameworks?>([^<]*)</TargetFrameworks?>') |
+        ForEach-Object { $_.Groups[1].Value -split ';' } |
+        ForEach-Object { if ($_ -match '^\s*net(\d+)\.\d') { [int] $Matches[1] } } |
+        Where-Object { $_ -ge 5 })
+    $sdks = @(Invoke-DevContainer (@('exec') + $common + @('sh', '-c', 'command -v dotnet >/dev/null 2>&1 && dotnet --list-sdks; true')) 2>$null |
+        ForEach-Object { if ("$_" -match '^(\d+)\.(\d+)\.(\d+)') { [int] $Matches[1] } })
+    if ($sdks.Count -eq 0) {
+        Stop-WithError 'The dev container has no .NET SDK. Use a .NET image (mcr.microsoft.com/devcontainers/dotnet) or add the feature ghcr.io/devcontainers/features/dotnet:2 to devcontainer.json, then rebuild the container.'
+    }
+    $newest = ($sdks | Measure-Object -Maximum).Maximum
+    $tooNew = @($majors | Where-Object { $_ -gt $newest })
+    if ($tooNew.Count -gt 0) {
+        Write-Host ("[dev container] The project targets net$($tooNew[0]).0, but the newest .NET SDK in the dev container is version $newest. " +
+            "Use a .NET $($tooNew[0]) image, or set the dotnet feature's version in devcontainer.json, and rebuild the container.") -ForegroundColor Yellow
+    }
 }
 
 # Build into the container's own file system, not obj/ and bin/ in the mounted folder: Windows bind mounts (Podman and

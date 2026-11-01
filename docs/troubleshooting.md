@@ -105,6 +105,24 @@ Container**; **Rebuild Container Without Cache** helps when a cached layer is st
 the container, and their output is in the Output window. `onCreateCommand` and `postCreateCommand` run only when
 the container is created, so after fixing one use **Rebuild Container**.
 
+## The SDK in the container does not match
+
+The build in the container fails with `NETSDK1045: The current .NET SDK does not support targeting .NET 10.0`,
+`A compatible .NET SDK was not found`, or `dotnet: not found`. The container has its own .NET SDK, separate from
+the one on Windows, and it is too old for the project's target framework or for the project's global.json, or
+there is none.
+
+- Use an image for that .NET version, such as `mcr.microsoft.com/devcontainers/dotnet:10.0`, or set the version
+  of the dotnet feature in devcontainer.json:
+
+  ```jsonc
+  "features": { "ghcr.io/devcontainers/features/dotnet:2": { "version": "10.0" } }
+  ```
+
+- Then **Rebuild Container**: features and images apply only when the container is created.
+- **Open in Container** checks this every time it opens the container and lists what does not match; see
+  [intellisense.md](intellisense.md).
+
 ## More
 
 - **Cancel a long build:** click the progress notification at the bottom of Visual Studio and cancel it. The
