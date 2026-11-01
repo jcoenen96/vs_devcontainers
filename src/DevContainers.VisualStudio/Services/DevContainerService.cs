@@ -323,7 +323,8 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
     /// </summary>
     private async Task<(string Name, string Path)?> ChooseProjectAsync(DevContainerConfigFile configFile, string question, bool preferLaunchProfile, CancellationToken cancellationToken)
     {
-        var workspace = Path.GetFullPath(configFile.WorkspaceFolder) + Path.DirectorySeparatorChar;
+        // The workspace folder can end in a separator (the solution folder does); add exactly one.
+        var workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(configFile.WorkspaceFolder)) + Path.DirectorySeparatorChar;
         var projects = await extensibility.Workspaces().QueryProjectsAsync(
             project => project.With(p => p.Name).With(p => p.Path),
             cancellationToken);
