@@ -23,8 +23,15 @@ public sealed record ContainerRuntime(ContainerRuntimeKind Kind, string Executab
     public string? ComposePath { get; init; }
 }
 
+/// <summary>Why one engine could not be used: not installed (<see cref="Path"/> is null), or installed but not answering.</summary>
+public sealed record EngineProblem(ContainerRuntimeKind Kind, string? Path, string Error);
+
 /// <summary>Thrown when no usable container engine is available.</summary>
-public sealed class ContainerRuntimeNotFoundException(string message) : Exception(message);
+public sealed class ContainerRuntimeNotFoundException(string message, IReadOnlyList<EngineProblem>? engines = null) : Exception(message)
+{
+    /// <summary>What was wrong with each engine that was tried.</summary>
+    public IReadOnlyList<EngineProblem> Engines { get; } = engines ?? [];
+}
 
 /// <summary>Finds a working Docker or Podman installation.</summary>
 public sealed class ContainerRuntimeDetector(IProcessRunner runner, Func<string, string?>? findOnPath = null)
@@ -40,21 +47,21 @@ public sealed class ContainerRuntimeDetector(IProcessRunner runner, Func<string,
             _ => new[] { ContainerRuntimeKind.Docker, ContainerRuntimeKind.Podman },
         };
 
-        var problems = new List<string>();
+        var problems = new List<EngineProblem>();
         foreach (var kind in candidates)
         {
             var name = kind == ContainerRuntimeKind.Docker ? "docker" : "podman";
             var path = !string.IsNullOrWhiteSpace(explicitPath) && candidates.Length == 1 ? explicitPath : this.findOnPath(name);
             if (path is null)
             {
-                problems.Add($"{name}: not found on PATH");
+                problems.Add(new EngineProblem(kind, null, "not found on PATH"));
                 continue;
             }
 
             var version = await this.TryGetServerVersionAsync(path, cancellationToken).ConfigureAwait(false);
             if (version.Error is not null)
             {
-                problems.Add($"{name}: {version.Error}");
+                problems.Add(new EngineProblem(kind, path, version.Error));
                 continue;
             }
 
@@ -65,7 +72,29 @@ public sealed class ContainerRuntimeDetector(IProcessRunner runner, Func<string,
         }
 
         throw new ContainerRuntimeNotFoundException(
-            "No running container engine was found. Install and start Docker Desktop or Podman. Details: " + string.Join("; ", problems));
+            "No running container engine was found. Install and start Docker Desktop or Podman. Details: "
+                + string.Join("; ", problems.Select(p => $"{p.Kind.ToString().ToLowerInvariant()}: {p.Error}")),
+            problems);
+    }
+
+    /// <summary>
+    /// Like <see cref="DetectAsync"/>, but keeps trying until an engine answers or <paramref name="timeout"/> passes:
+    /// for an engine that is starting (Docker Desktop, a Podman machine).
+    /// </summary>
+    public async Task<ContainerRuntime> WaitAsync(ContainerRuntimePreference preference, string? explicitPath, TimeSpan timeout, CancellationToken cancellationToken, TimeSpan? interval = null)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            try
+            {
+                return await this.DetectAsync(preference, explicitPath, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ContainerRuntimeNotFoundException) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(interval ?? TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     private async Task<(string? Value, string? Error)> TryGetServerVersionAsync(string path, CancellationToken cancellationToken)

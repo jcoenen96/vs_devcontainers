@@ -1,5 +1,6 @@
 using DevContainers.Core.Cli;
 using DevContainers.Core.Configuration;
+using DevContainers.Core.Diagnostics;
 using DevContainers.Core.Launch;
 using DevContainers.Core.Processes;
 using DevContainers.Core.Runtime;
@@ -122,7 +123,7 @@ public sealed class DevContainerSession(
         try
         {
             this.SetState(DevContainerState.Starting);
-            var runtime = await this.GetRuntimeAsync(settings, cancellationToken).ConfigureAwait(false);
+            var runtime = await this.GetRuntimeAsync(settings, cancellationToken, log).ConfigureAwait(false);
             log($"Using {runtime.Kind} {runtime.ServerVersion} ({runtime.ExecutablePath}).");
 
             // Reuse the container VS Code (or an earlier run) created for this folder by passing its exact labels;
@@ -161,16 +162,64 @@ public sealed class DevContainerSession(
         }
     }
 
-    private async Task<ContainerRuntime> GetRuntimeAsync(DevContainerSettings settings, CancellationToken cancellationToken)
+    /// <summary>
+    /// Whether the dev container still runs, as far as the engine knows. Updates <see cref="State"/> when it was
+    /// stopped or removed outside Visual Studio (VS Code, the engine's own UI, a reboot).
+    /// </summary>
+    public async Task<bool> RefreshAsync(DevContainerSettings settings, CancellationToken cancellationToken)
+    {
+        var engine = new ContainerEngineClient(await this.GetRuntimeAsync(settings, cancellationToken).ConfigureAwait(false), this.runner);
+        var running = (await engine.FindDevContainersAsync(this.ConfigFile.WorkspaceFolder, this.ConfigFile.ConfigPath, cancellationToken).ConfigureAwait(false))
+            .Any(c => c.IsRunning && (this.Container is null || SameId(c.Id, this.Container.ContainerId)));
+        if (!running && this.State == DevContainerState.Running)
+        {
+            this.Container = null;
+            this.SetState(DevContainerState.Stopped);
+        }
+
+        return running && this.State == DevContainerState.Running;
+    }
+
+    /// <summary>Whether a container of this workspace runs, whoever started it (VS Code, the Run button's launcher).</summary>
+    public async Task<bool> IsAnyContainerRunningAsync(DevContainerSettings settings, CancellationToken cancellationToken)
+    {
+        var engine = new ContainerEngineClient(await this.GetRuntimeAsync(settings, cancellationToken).ConfigureAwait(false), this.runner);
+        return (await engine.FindDevContainersAsync(this.ConfigFile.WorkspaceFolder, this.ConfigFile.ConfigPath, cancellationToken).ConfigureAwait(false))
+            .Any(c => c.IsRunning);
+    }
+
+    private async Task<ContainerRuntime> GetRuntimeAsync(DevContainerSettings settings, CancellationToken cancellationToken, Action<string>? log = null)
     {
         // Detect every time: the user may have started Docker Desktop or switched to Podman since the last run.
-        this.Runtime = await new ContainerRuntimeDetector(this.runner)
-            .DetectAsync(settings.Runtime, settings.RuntimePath, cancellationToken)
-            .ConfigureAwait(false);
+        var detector = new ContainerRuntimeDetector(this.runner);
+        try
+        {
+            this.Runtime = await detector.DetectAsync(settings.Runtime, settings.RuntimePath, cancellationToken).ConfigureAwait(false);
+            return this.Runtime;
+        }
+        catch (ContainerRuntimeNotFoundException ex) when (log is not null)
+        {
+            if (!await new EngineStarter(this.runner).IsStartingAsync(ex.Engines, cancellationToken).ConfigureAwait(false))
+            {
+                throw;
+            }
+        }
+
+        // Docker Desktop or the Podman machine is on its way up (just after signing in, for example): wait for it
+        // instead of failing.
+        log("The container engine is still starting; waiting for it (up to 3 minutes).");
+        this.Runtime = await detector.WaitAsync(settings.Runtime, settings.RuntimePath, StartupTimeout, cancellationToken).ConfigureAwait(false);
         return this.Runtime;
     }
 
+    /// <summary>How long to wait for an engine that is starting.</summary>
+    public static TimeSpan StartupTimeout { get; } = TimeSpan.FromMinutes(3);
+
     private static string ShortId(string id) => id.Length > 12 ? id[..12] : id;
+
+    // The engine lists short ids, the CLI reports full ones.
+    private static bool SameId(string a, string b) =>
+        a.Length > 0 && b.Length > 0 && (a.StartsWith(b, StringComparison.OrdinalIgnoreCase) || b.StartsWith(a, StringComparison.OrdinalIgnoreCase));
 
     private void Fail(Exception ex)
     {

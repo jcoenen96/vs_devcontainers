@@ -127,21 +127,94 @@ function Install-Prerequisites {
     }
 }
 
+function Test-ContainerEngine([string] $path) {
+    # The engine's version if it answers and runs Linux containers, else $null. An engine in Windows containers
+    # mode cannot run dev containers.
+    $version, $os = "$(& $path version --format '{{.Server.Version}} {{.Server.Os}}' 2>$null)" -split ' ', 2
+    if ($LASTEXITCODE -eq 0 -and $version -and $os -ne 'windows') { return $version }
+    return $null
+}
+
+function Get-PodmanMachineState([string] $podman) {
+    $state = "$(& $podman machine inspect --format '{{.State}}' 2>&1)".Trim().ToLowerInvariant()
+    if ($LASTEXITCODE -ne 0) { if ($state -match 'does not exist|no such|not found') { return 'none' } else { return 'unknown' } }
+    return $state
+}
+
+function Wait-ContainerEngine([string] $path, [string] $what) {
+    Write-Step "Waiting for $what to start (up to 3 minutes)"
+    $deadline = (Get-Date).AddMinutes(3)
+    while ((Get-Date) -lt $deadline) {
+        $version = Test-ContainerEngine $path
+        if ($version) { return $version }
+        Start-Sleep -Seconds 3
+    }
+    return $null
+}
+
 function Find-ContainerEngine {
     # DEVCONTAINERS_RUNTIME=docker or podman picks one; otherwise Docker is preferred when it is running.
     $names = if ($env:DEVCONTAINERS_RUNTIME) { @($env:DEVCONTAINERS_RUNTIME) } else { @('docker', 'podman') }
+    $installed = @()
     foreach ($name in $names) {
         $command = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $command) { continue }
-        $version, $os = "$(& $command.Source version --format '{{.Server.Version}} {{.Server.Os}}' 2>$null)" -split ' ', 2
-        # An engine in Windows containers mode cannot run dev containers, which are Linux containers.
-        if ($LASTEXITCODE -eq 0 -and $version -and $os -ne 'windows') {
+        $installed += , @($name, $command.Source)
+        $version = Test-ContainerEngine $command.Source
+        if ($version) {
             Write-Step "Using $name $version"
             return $command.Source
         }
     }
 
-    Stop-WithError ('No running container engine was found (tried ' + ($names -join ', ') + '). Start Docker Desktop or Podman and run again.')
+    if ($installed.Count -eq 0) {
+        Stop-WithError ('Neither Docker nor Podman was found (tried ' + ($names -join ', ') + '). Install Docker Desktop or Podman Desktop, start it, and run again.')
+    }
+
+    # Installed but not answering: wait when it is starting, or offer to start it.
+    $dockerDesktop = if ($onWindows) { Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe' } else { $null }
+    foreach ($engine in $installed) {
+        $name, $path = $engine
+        if ($name -eq 'docker' -and $dockerDesktop -and (Test-Path $dockerDesktop)) {
+            if (-not (Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue)) {
+                $answer = Read-Host 'Docker Desktop is installed but not running. Start it now? [Y/n]'
+                if ($answer -and $answer -notmatch '^(y|yes)$') { continue }
+                Start-Process $dockerDesktop
+            }
+            $version = Wait-ContainerEngine $path 'Docker Desktop'
+            if ($version) { Write-Step "Using docker $version"; return $path }
+        }
+        if ($name -eq 'podman') {
+            $state = Get-PodmanMachineState $path
+            if ($state -eq 'starting') {
+                $version = Wait-ContainerEngine $path 'the Podman machine'
+                if ($version) { Write-Step "Using podman $version"; return $path }
+            } elseif ($state -in 'stopped', 'configured', 'none') {
+                $prompt = if ($state -eq 'none') { 'Podman has no machine yet. Create and start one now (podman machine init, then start)? [Y/n]' } else { 'The Podman machine is not running. Start it now? [Y/n]' }
+                $answer = Read-Host $prompt
+                if ($answer -and $answer -notmatch '^(y|yes)$') { continue }
+                if ($state -eq 'none') { & $path machine init; if ($LASTEXITCODE -ne 0) { Stop-WithError 'podman machine init failed (see above).' } }
+                & $path machine start
+                $version = Wait-ContainerEngine $path 'the Podman machine'
+                if ($version) { Write-Step "Using podman $version"; return $path }
+            }
+        }
+    }
+
+    Stop-WithError ('No running container engine was found (tried ' + ($names -join ', ') + '). Start Docker Desktop or the Podman machine and run again. Docker Desktop must use Linux containers.')
+}
+
+function Get-ProblemAdvice([string] $text) {
+    # The next step for common failures of devcontainer up. The extension's ProblemAdvisor knows the same ones.
+    switch -Regex ($text) {
+        'no space left on device|not enough space on the disk' { return "The container engine ran out of disk space. Free space with 'docker system prune' (or 'podman system prune')." }
+        'port is already allocated|address already in use' { return 'A port the container publishes (appPort or a Compose ports entry) is already in use. Stop the program that uses it, or change the port.' }
+        'pull access denied|unauthorized|authentication required' { return "The registry refused access to the image. Check its name, and sign in with 'docker login' (or 'podman login')." }
+        'tls handshake timeout|dial tcp|i/o timeout|no such host|temporary failure in name resolution|ENOTFOUND|ETIMEDOUT' { return 'The engine could not reach the network. Check the connection, a proxy or VPN, then run again.' }
+        'failed to (solve|build)|error building image|executor failed running' { return 'Building the image failed; the failing step is above. Fix the Dockerfile or feature and run again.' }
+        'postCreateCommand|postStartCommand|onCreateCommand|updateContentCommand' { return 'A lifecycle command of devcontainer.json failed; its output is above.' }
+    }
+    return $null
 }
 
 function ConvertTo-LabelPath([string] $path) {
@@ -424,7 +497,8 @@ try { [void] $startLock.WaitOne() } catch [System.Threading.AbandonedMutexExcept
 Write-Step "Starting the dev container for $workspace (the first time this builds it, which takes a while)"
 $upOutput = Invoke-DevContainer (@('up') + $common)
 if ($LASTEXITCODE -ne 0) {
-    Stop-WithError ("devcontainer up failed: " + ($upOutput | Select-Object -Last 1))
+    $advice = Get-ProblemAdvice ($upOutput -join "`n")
+    Stop-WithError ("devcontainer up failed: " + ($upOutput | Select-Object -Last 1) + $(if ($advice) { "`n$advice" } else { '' }))
 }
 
 $up = $upOutput | Where-Object { "$_" -match '^\{.*"outcome"' } | Select-Object -Last 1 | ConvertFrom-Json
