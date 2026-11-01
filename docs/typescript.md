@@ -70,8 +70,9 @@ container, and attaches Visual Studio's JavaScript debugger to it:
    as **Debug > Attach to Process** does with the connection type **JavaScript and TypeScript (Chrome
    DevTools/V8 Inspector)**.
 
-When the debugger cannot attach by itself (that connection type is missing, or the app did not start within five
-minutes), the extension says how to attach by hand: **Debug > Attach to Process**, the connection type above,
+The attach runs in the background, so the other commands work while the app starts. When the debugger cannot attach
+by itself (that connection type is missing, or the app did not start within two minutes), the Output window says why,
+and the extension says how to attach by hand: **Debug > Attach to Process**, the connection type above,
 `localhost:9229` as the target. `chrome://inspect` or `edge://inspect` in a browser on Windows works too.
 
 Turn on source maps (`"sourceMap": true` in tsconfig.json, `--enable-source-maps` for Node.js) so the debugger shows
