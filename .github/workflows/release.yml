@@ -1,7 +1,7 @@
 name: Release
 
 # Builds the VSIX for a version tag (v0.9.0) and publishes it as a GitHub release, with that version's section of
-# CHANGELOG.md as the notes. Publishing to the Visual Studio Marketplace is a separate workflow (marketplace.yml).
+# CHANGELOG.md as the notes, then starts the Marketplace workflow (marketplace.yml), which waits for approval.
 # See docs/releasing.md.
 
 on:
@@ -15,6 +15,8 @@ on:
 
 permissions:
   contents: write
+  # To start the Marketplace workflow for the new release.
+  actions: write
 
 jobs:
   release:
@@ -78,3 +80,12 @@ jobs:
           } else {
             gh release create $env:TAG "${{ steps.vsix.outputs.path }}" "${{ steps.vsix.outputs.path }}.sha256" @flags
           }
+
+      - name: Start publishing to the Marketplace
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A release created with the workflow token raises no release event, so start it explicitly. It waits for
+          # approval in the marketplace environment.
+          gh workflow run marketplace.yml --ref $env:TAG -f tag=$env:TAG

@@ -129,6 +129,23 @@ jobs:
         run: msbuild VsDevContainers.slnx /restore /p:Configuration=Release /v:minimal
       - name: Unit tests
         run: dotnet test tests/DevContainers.Core.Tests/DevContainers.Core.Tests.csproj -c Release --no-build
+      - name: The VSIX has what the Marketplace listing needs
+        shell: pwsh
+        run: |
+          $vsix = Get-ChildItem src/DevContainers.VisualStudio/bin/Release -Recurse -Filter *.vsix | Select-Object -First 1
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($vsix.FullName)
+          try {
+            $names = $zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') }
+            $reader = New-Object IO.StreamReader(($zip.Entries | Where-Object FullName -eq 'extension.vsixmanifest').Open())
+            $manifest = $reader.ReadToEnd(); $reader.Dispose()
+          } finally { $zip.Dispose() }
+          $manifest
+          $problems = @()
+          foreach ($file in 'Resources/icon.png', 'Resources/preview.png') { if ($names -notcontains $file) { $problems += "$file is not in the VSIX" } }
+          foreach ($element in '<Icon>', '<PreviewImage>', '<MoreInfo>', '<ReleaseNotes>') { if ($manifest -notmatch [regex]::Escape($element)) { $problems += "The manifest has no $element" } }
+          if ($problems) { throw ($problems -join '; ') }
+          Get-Content -Raw marketplace/publishManifest.json | ConvertFrom-Json | Out-Null
       - uses: actions/upload-artifact@v4
         with:
           name: DevContainers.VisualStudio.vsix

@@ -1,0 +1,105 @@
+name: Publish to the Visual Studio Marketplace
+
+# Publishes the VSIX of a GitHub release to the Visual Studio Marketplace, signed with the publisher's certificate.
+# Runs when release.yml has published a GitHub release (it starts this workflow: releases it creates with the
+# workflow token raise no release event), when a release is published by hand, or from Run workflow for an existing
+# release. Waits for approval in the
+# `marketplace` environment before anything leaves GitHub. See docs/marketplace.md for the one-time setup.
+#
+# Secrets (in the `marketplace` environment):
+#   MARKETPLACE_PAT             Azure DevOps personal access token with the Marketplace (Manage) scope.
+#   VSIX_SIGNING_CERTIFICATE    The code signing certificate as a base64 encoded .pfx.
+#   VSIX_SIGNING_PASSWORD       Its password.
+# Variables (repository or environment):
+#   MARKETPLACE_PUBLISHER       The Marketplace publisher ID.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The GitHub release to publish, such as v0.9.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Sign and publish
+    runs-on: windows-2025-vs2026
+    environment: marketplace
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+
+      - name: Check the setup
+        shell: pwsh
+        env:
+          MARKETPLACE_PAT: ${{ secrets.MARKETPLACE_PAT }}
+          VSIX_SIGNING_CERTIFICATE: ${{ secrets.VSIX_SIGNING_CERTIFICATE }}
+          PUBLISHER: ${{ vars.MARKETPLACE_PUBLISHER }}
+        run: |
+          $missing = @()
+          if (-not $env:MARKETPLACE_PAT) { $missing += 'secret MARKETPLACE_PAT' }
+          if (-not $env:VSIX_SIGNING_CERTIFICATE) { $missing += 'secret VSIX_SIGNING_CERTIFICATE' }
+          if (-not $env:PUBLISHER) { $missing += 'variable MARKETPLACE_PUBLISHER' }
+          if ($missing) { throw "Set up publishing first (docs/marketplace.md). Missing: $($missing -join ', ')." }
+
+      - name: Download the release's VSIX
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'release'
+          gh release download $env:TAG --pattern '*.vsix' --pattern '*.vsix.sha256' --dir $dir
+          Push-Location $dir
+          $line = Get-Content (Get-ChildItem -Filter *.sha256 | Select-Object -First 1)
+          $expected, $name = $line -split '\s+', 2
+          if ((Get-FileHash $name -Algorithm SHA256).Hash -ne $expected) { throw "The SHA-256 of $name does not match the release's." }
+          Pop-Location
+          "VSIX=$(Join-Path $dir $name)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Sign the VSIX
+        shell: pwsh
+        env:
+          VSIX_SIGNING_CERTIFICATE: ${{ secrets.VSIX_SIGNING_CERTIFICATE }}
+          VSIX_SIGNING_PASSWORD: ${{ secrets.VSIX_SIGNING_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:VSIX_SIGNING_CERTIFICATE))
+          try {
+            # Microsoft's VSIX signing tool ships as a NuGet package with the executable inside.
+            nuget install Microsoft.VSSDK.VsixSignTool -OutputDirectory "$env:RUNNER_TEMP\tools" -NonInteractive | Out-Host
+            $tool = Get-ChildItem "$env:RUNNER_TEMP\tools" -Filter VsixSignTool.exe -Recurse | Select-Object -First 1
+            if (-not $tool) { throw 'VsixSignTool.exe was not found.' }
+            & $tool.FullName sign /f $pfx /p $env:VSIX_SIGNING_PASSWORD /sha1 /fd sha256 /tr http://timestamp.digicert.com /td sha256 $env:VSIX
+            if ($LASTEXITCODE -ne 0) { throw "Signing failed (exit code $LASTEXITCODE)." }
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Publish
+        shell: pwsh
+        env:
+          MARKETPLACE_PAT: ${{ secrets.MARKETPLACE_PAT }}
+          PUBLISHER: ${{ vars.MARKETPLACE_PUBLISHER }}
+        run: |
+          $manifest = Join-Path $env:RUNNER_TEMP 'publishManifest.json'
+          (Get-Content -Raw marketplace/publishManifest.json).Replace('__PUBLISHER__', $env:PUBLISHER) | Out-File -Encoding utf8 $manifest
+          Copy-Item marketplace/overview.md (Join-Path $env:RUNNER_TEMP 'overview.md')
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -prerelease -property installationPath
+          $publisher = Get-ChildItem $vs -Filter VsixPublisher.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $publisher) { throw 'VsixPublisher.exe was not found in the Visual Studio installation.' }
+          & $publisher.FullName publish -payload $env:VSIX -publishManifest $manifest -personalAccessToken $env:MARKETPLACE_PAT -ignoreWarnings 'VSIXValidatorWarning01,VSIXValidatorWarning02'
+          if ($LASTEXITCODE -ne 0) { throw "VsixPublisher failed (exit code $LASTEXITCODE)." }
+          "Published $(Split-Path $env:VSIX -Leaf) to https://marketplace.visualstudio.com/items?itemName=$($env:PUBLISHER).DevContainers"

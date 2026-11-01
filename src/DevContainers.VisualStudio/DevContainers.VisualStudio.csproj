@@ -36,6 +36,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The Marketplace and Extension Manager icon and preview image (ExtensionMetadata.Icon and PreviewImage). -->
+    <Content Include="Resources\icon.png;Resources\preview.png" CopyToOutputDirectory="PreserveNewest" IncludeInVSIX="true" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Remote UI: the XAML goes to Visual Studio as data, so it is an embedded resource named after its control. -->
     <EmbeddedResource Include="ToolWindows\DevContainerStatusControl.xaml" LogicalName="$(RootNamespace).ToolWindows.DevContainerStatusControl.xaml" />
   </ItemGroup>
