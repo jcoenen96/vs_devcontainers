@@ -65,7 +65,9 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 | Rebuild Container Without Cache | The same, building the image with `--no-cache`. |
 | Stop Container | Stops the container, and every service of a Compose based container. Asks first when VS Code has it open. |
 
-The full log is in the **Dev Containers** pane of the Output window.
+The full log is in the **Dev Containers** pane of the Output window. When something fails, the extension says
+what to do next and offers to fix it when it can (start the engine, open or rebuild the container); see
+[docs/troubleshooting.md](docs/troubleshooting.md).
 
 Settings are under **Tools > Options > Dev Containers**: container engine (Automatic, Docker or Podman), and
 paths to the engine and the CLI when they are not on PATH. Automatic uses Docker when it is running and falls

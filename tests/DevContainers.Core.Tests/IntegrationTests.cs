@@ -127,6 +127,49 @@ public class IntegrationTests
     }
 
     [Fact]
+    public async Task Refresh_NoticesAContainerRemovedOutsideVisualStudio_AndOpenCreatesItAgain()
+    {
+        if (Environment.GetEnvironmentVariable("DEVCONTAINERS_INTEGRATION") != "1")
+        {
+            return;
+        }
+
+        var settings = DevContainerSettings.Default with
+        {
+            Runtime = Enum.TryParse<Runtime.ContainerRuntimePreference>(Environment.GetEnvironmentVariable("DEVCONTAINERS_RUNTIME"), ignoreCase: true, out var runtime)
+                ? runtime
+                : Runtime.ContainerRuntimePreference.Auto,
+        };
+
+        using var temp = new TempFolder();
+        temp.Write(".devcontainer/devcontainer.json", """{ "image": "docker.io/library/alpine:3.20" }""");
+        var configFile = Assert.Single(DevContainerConfigLocator.FindFromFolder(temp.Path));
+        var engineRuntime = await new Runtime.ContainerRuntimeDetector(new Processes.ProcessRunner()).DetectAsync(settings.Runtime, null, default);
+        var engine = new Runtime.ContainerEngineClient(engineRuntime, new Processes.ProcessRunner());
+
+        try
+        {
+            var session = new DevContainerSession(configFile);
+            var first = await session.OpenAsync(settings, _ => { }, default);
+            Assert.True(await session.RefreshAsync(settings, default));
+
+            // Removed outside Visual Studio, as with 'docker rm -f' or the engine's own UI.
+            await engine.RemoveAsync(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default), default);
+            Assert.False(await session.RefreshAsync(settings, default));
+            Assert.Equal(DevContainerState.Stopped, session.State);
+            Assert.False(await session.IsAnyContainerRunningAsync(settings, default));
+
+            var second = await session.OpenAsync(settings, _ => { }, default);
+            Assert.NotEqual(first.ContainerId, second.ContainerId);
+            Assert.True(await session.RefreshAsync(settings, default));
+        }
+        finally
+        {
+            await engine.RemoveAsync(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default), default);
+        }
+    }
+
+    [Fact]
     public async Task Open_CopiesGitSettingsFromThisComputer()
     {
         if (Environment.GetEnvironmentVariable("DEVCONTAINERS_INTEGRATION") != "1")

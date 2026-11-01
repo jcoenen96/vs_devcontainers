@@ -3,6 +3,7 @@ using System.Diagnostics;
 using DevContainers.Core;
 using DevContainers.Core.Configuration;
 using DevContainers.Core.Debugging;
+using DevContainers.Core.Diagnostics;
 using DevContainers.Core.Launch;
 using DevContainers.Core.Runtime;
 using DevContainers.Core.Testing;
@@ -22,6 +23,8 @@ namespace DevContainers.VisualStudio.Services;
 internal sealed class DevContainerService(VisualStudioExtensibility extensibility, PrerequisiteInstaller prerequisites) : IDisposable
 {
     private const string OutputName = "Dev Containers";
+
+    private const string TroubleshootingUrl = "https://github.com/jcoenen96/vs_devcontainers/blob/main/docs/troubleshooting.md";
 
     private readonly ConcurrentDictionary<string, DevContainerSession> sessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim outputGate = new(1, 1);
@@ -88,7 +91,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         }
         catch (Exception ex)
         {
-            await this.ReportFailureAsync("The dev container could not be started.", session.LastError ?? ex.Message, cancellationToken);
+            await this.HandleFailureAsync("The dev container could not be started.", ex, session, ct => this.OpenAsync(rebuild, noCache, ct), cancellationToken);
         }
     }
 
@@ -121,23 +124,54 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await this.ReportFailureAsync("The dev container could not be stopped.", ex.Message, cancellationToken);
+            await this.HandleFailureAsync("The dev container could not be stopped.", ex, session, null, cancellationToken);
         }
     }
 
     /// <summary>Opens an interactive shell in the running container in a new console window.</summary>
     public async Task OpenTerminalAsync(CancellationToken cancellationToken)
     {
-        var session = this.Current;
-        if (session is not { State: DevContainerState.Running })
+        var configFile = this.Current?.ConfigFile ?? await this.FindCurrentConfigAsync(cancellationToken);
+        if (configFile is null)
         {
             await extensibility.Shell().ShowPromptAsync("No dev container is running. Use 'Open in Container' first.", PromptOptions.OK, cancellationToken);
             return;
         }
 
+        var session = this.sessions.GetOrAdd(configFile.ConfigPath, _ => new DevContainerSession(configFile));
+        this.Current = session;
+        var settings = await this.ReadSettingsAsync(cancellationToken);
         try
         {
-            var spec = session.CreateShellSpec(await this.ReadSettingsAsync(cancellationToken));
+            // The container may have been stopped or removed outside Visual Studio, or started outside it (VS Code,
+            // the Run button). Check with the engine rather than trusting what this session last saw.
+            if (!await session.RefreshAsync(settings, cancellationToken))
+            {
+                if (await session.IsAnyContainerRunningAsync(settings, cancellationToken))
+                {
+                    // Started elsewhere: attach to it; devcontainer up reuses a running container in seconds.
+                    await session.OpenAsync(settings, await this.GetLogAsync(cancellationToken), cancellationToken);
+                }
+                else
+                {
+                    var open = await extensibility.Shell().ShowPromptAsync(
+                        "The dev container is not running. It was stopped or removed outside Visual Studio, or not opened yet.\n\nOpen it now, then the terminal?",
+                        PromptOptions.OKCancel,
+                        cancellationToken);
+                    if (!open)
+                    {
+                        return;
+                    }
+
+                    await this.OpenAsync(rebuild: false, noCache: false, cancellationToken);
+                    if (session.State != DevContainerState.Running)
+                    {
+                        return;
+                    }
+                }
+            }
+
+            var spec = session.CreateShellSpec(settings);
             var startInfo = new ProcessStartInfo(spec.FileName)
             {
                 // A console program started without a console of its own gets a new console window.
@@ -152,16 +186,12 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
 
             Process.Start(startInfo)?.Dispose();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await this.ReportFailureAsync("The container terminal could not be opened.", ex.Message, cancellationToken);
+            await this.HandleFailureAsync("The container terminal could not be opened.", ex, session, this.OpenTerminalAsync, cancellationToken);
         }
     }
 
-    /// <summary>
-    /// Adds the "Dev Container" launch profile and launcher script to a project, so the Run button starts it in the
-    /// dev container.
-    /// </summary>
     public async Task AddLaunchProfileAsync(CancellationToken cancellationToken)
     {
         var configFile = await this.ResolveConfigAsync(cancellationToken);
@@ -266,7 +296,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         }
         catch (Exception ex)
         {
-            await this.ReportFailureAsync("Debugging in the dev container could not start.", ex is InvalidOperationException ? ex.Message : session.LastError ?? ex.Message, cancellationToken);
+            await this.HandleFailureAsync("Debugging in the dev container could not start.", ex, ex is InvalidOperationException ? null : session, this.DebugAsync, cancellationToken);
         }
     }
 
@@ -336,7 +366,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         }
         catch (Exception ex)
         {
-            await this.ReportFailureAsync("The tests could not run in the dev container.", session.LastError ?? ex.Message, cancellationToken);
+            await this.HandleFailureAsync("The tests could not run in the dev container.", ex, session, this.RunTestsAsync, cancellationToken);
         }
     }
 
@@ -553,6 +583,85 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
             $"{title}\n\n{detail}\n\nSee the '{OutputName}' pane in the Output window for the full log.",
             PromptOptions.ErrorConfirm,
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Explains a failure with a next step, and when the extension can fix it (start the engine, open or rebuild
+    /// the container), offers to, then runs <paramref name="retry"/>.
+    /// </summary>
+    private async Task HandleFailureAsync(string title, Exception exception, DevContainerSession? session, Func<CancellationToken, Task>? retry, CancellationToken cancellationToken)
+    {
+        var detail = session?.LastError ?? exception.Message;
+        var problem = ProblemAdvisor.Diagnose(exception, detail);
+        var log = await this.GetLogAsync(cancellationToken);
+        log($"Error: {detail}");
+        log($"Next step: {problem.NextStep}");
+
+        var message = $"{title}\n\n{problem.Summary}\n\n{problem.NextStep}"
+            + (problem.HelpTopic is { } topic ? $"\n\nTroubleshooting: \"{topic}\" in {TroubleshootingUrl}" : string.Empty)
+            + $"\n\nThe '{OutputName}' pane of the Output window has the full log.";
+        var fix = problem.FixLabel is not null && (retry is not null || problem.Fix == ProblemFix.RebuildContainer);
+        if (!fix)
+        {
+            await extensibility.Shell().ShowPromptAsync(message, PromptOptions.ErrorConfirm, cancellationToken);
+            return;
+        }
+
+        var choices = new ChoiceResultCollection<bool>
+        {
+            { problem.FixLabel!, true },
+            { "Close", false },
+        };
+        if (!await extensibility.Shell().ShowPromptAsync(message, new PromptOptions<bool>(choices, defaultChoiceIndex: 0, dismissedReturns: false) { Title = "Dev Containers" }, cancellationToken))
+        {
+            return;
+        }
+
+        log($"{problem.FixLabel}...");
+        try
+        {
+            switch (problem.Fix)
+            {
+                case ProblemFix.StartDockerDesktop:
+                    EngineStarter.StartDockerDesktop();
+                    await this.WaitForEngineAsync("Waiting for Docker Desktop to start", cancellationToken);
+                    break;
+                case ProblemFix.StartPodmanMachine:
+                    var podman = (exception as ContainerRuntimeNotFoundException)?.Engines.FirstOrDefault(e => e.Kind == ContainerRuntimeKind.Podman && e.Path is not null)?.Path
+                        ?? session?.Runtime?.ExecutablePath
+                        ?? "podman";
+                    await new EngineStarter(new Core.Processes.ProcessRunner()).StartPodmanMachineAsync(podman, log, cancellationToken);
+                    await this.WaitForEngineAsync("Waiting for the Podman machine to start", cancellationToken);
+                    break;
+                case ProblemFix.RebuildContainer:
+                    await this.OpenAsync(rebuild: true, noCache: false, cancellationToken);
+                    return;
+                case ProblemFix.OpenInContainer:
+                    await this.OpenAsync(rebuild: false, noCache: false, cancellationToken);
+                    if (session?.State != DevContainerState.Running)
+                    {
+                        return;
+                    }
+
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await this.ReportFailureAsync($"{problem.FixLabel} did not work.", ex.Message, cancellationToken);
+            return;
+        }
+
+        log("Trying again.");
+        await retry!(cancellationToken);
+    }
+
+    private async Task WaitForEngineAsync(string what, CancellationToken cancellationToken)
+    {
+        var settings = await this.ReadSettingsAsync(cancellationToken);
+        using var progress = await extensibility.Shell().StartProgressReportingAsync(what, new ProgressReporterOptions(isWorkCancellable: true), cancellationToken);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, progress.CancellationToken);
+        await new ContainerRuntimeDetector(new Core.Processes.ProcessRunner()).WaitAsync(settings.Runtime, settings.RuntimePath, DevContainerSession.StartupTimeout, linked.Token);
     }
 
     private static string DescribeConfig(DevContainerConfigFile file)
