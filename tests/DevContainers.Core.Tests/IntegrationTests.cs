@@ -125,4 +125,61 @@ public class IntegrationTests
             await engine.RemoveAsync(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default), default);
         }
     }
+
+    [Fact]
+    public async Task Open_CopiesGitSettingsFromThisComputer()
+    {
+        if (Environment.GetEnvironmentVariable("DEVCONTAINERS_INTEGRATION") != "1")
+        {
+            return;
+        }
+
+        var settings = DevContainerSettings.Default with
+        {
+            Runtime = Enum.TryParse<Runtime.ContainerRuntimePreference>(Environment.GetEnvironmentVariable("DEVCONTAINERS_RUNTIME"), ignoreCase: true, out var runtime)
+                ? runtime
+                : Runtime.ContainerRuntimePreference.Auto,
+        };
+
+        using var temp = new TempFolder();
+        temp.Write(".devcontainer/devcontainer.json", """
+            {
+              // Alpine with Git.
+              "image": "docker.io/alpine/git:v2.49.1",
+            }
+            """);
+
+        // Git on "this computer" reads its global settings from here (the launcher script inherits the variable).
+        var gitConfig = temp.Write("host.gitconfig", "[user]\n\tname = Dev Container Tester\n\temail = tester@example.com\n[alias]\n\tst = status -s\n");
+        var previous = Environment.GetEnvironmentVariable("GIT_CONFIG_GLOBAL");
+        Environment.SetEnvironmentVariable("GIT_CONFIG_GLOBAL", gitConfig);
+
+        var configFile = Assert.Single(DevContainerConfigLocator.FindFromFolder(temp.Path));
+        var session = new DevContainerSession(configFile);
+        var log = new List<string>();
+        try
+        {
+            var up = await session.OpenAsync(settings, log.Add, default);
+            var engine = new Processes.ProcessRunner();
+            var result = await engine.RunAsync(
+                new Processes.ProcessSpec(session.Runtime!.ExecutablePath, ["exec", up.ContainerId, "git", "config", "--global", "--list"]),
+                null,
+                default);
+
+            Assert.True(result.Succeeded, result.StandardError + string.Join(Environment.NewLine, log));
+            Assert.Contains("user.name=Dev Container Tester", result.StandardOutput);
+            Assert.Contains("user.email=tester@example.com", result.StandardOutput);
+            Assert.Contains("alias.st=status -s", result.StandardOutput);
+            Assert.Contains("safe.directory=*", result.StandardOutput);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GIT_CONFIG_GLOBAL", previous);
+            if (session.Runtime is not null)
+            {
+                var engine = new Runtime.ContainerEngineClient(session.Runtime, new Processes.ProcessRunner());
+                await engine.RemoveAsync(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default), default);
+            }
+        }
+    }
 }

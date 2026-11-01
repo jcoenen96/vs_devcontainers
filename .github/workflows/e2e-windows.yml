@@ -119,6 +119,7 @@ jobs:
         run: |
           dotnet dev-certs https
           dotnet user-secrets set HelloApi:Greeting "hello from Windows" --project samples/dotnet-webapi/HelloApi
+          git config --global user.name "Dev Container Tester"
 
       - name: Run the launcher with Windows PowerShell
         # The Dev Container launch profile's script on its own, with its output in this log: Windows PowerShell 5.1,

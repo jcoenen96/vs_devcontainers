@@ -9,8 +9,8 @@
       2. finds a running Docker or Podman,
       3. starts the dev container with "devcontainer up": it reuses the container of this folder, also one that
          VS Code created and may have open, and builds one only the first time,
-      4. copies the project's user secrets, your NuGet.Config and the HTTPS development certificate into the
-         container,
+      4. copies the project's user secrets, your NuGet.Config, the HTTPS development certificate and your Git
+         name, email and line ending settings into the container,
       5. stops the app if a previous run is still going in the container,
       6. runs "dotnet run" for the project inside the container, in this window.
 
@@ -38,7 +38,13 @@ param(
     [string] $LaunchProfile = '',
     [string] $Project = '',
     [string] $Config = '',
-    [string[]] $AppArgs = @()
+    [string[]] $AppArgs = @(),
+    # Used by the extension: copy this computer's settings into a running container, then exit.
+    [switch] $SyncOnly,
+    [string] $EnginePath = '',
+    [string] $ContainerId = '',
+    [string] $ContainerUser = 'root',
+    [string] $WorkspaceFolder = ''
 )
 
 # Native tools report failure through exit codes, which are checked below. 'Stop' would turn their stderr output
@@ -267,12 +273,39 @@ function Get-HostDevCertificate {
         Select-Object -First 1
 }
 
-function Sync-HostState([string] $containerId, [string] $user) {
+function ConvertTo-ShellLiteral([string] $value) {
+    # A single-quoted sh word: safe for any value.
+    return "'" + $value.Replace("'", "'\''") + "'"
+}
+
+function Get-HostGitSettings {
+    # The Git settings that make Git in the container behave like Git on Windows: who commits, the line ending
+    # conversion this repository's working tree was checked out with, and a few habits (aliases, default branch).
+    # Credential helpers, editors and paths are Windows specific and stay out.
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $git) { return @() }
+    $settings = @()
+    $lines = @(& $git.Source config --global --get-regexp '^(user\.(name|email)|init\.defaultbranch|pull\.rebase|push\.autosetupremote|alias\..*)$' 2>$null)
+    foreach ($line in $lines) {
+        $key, $value = "$line" -split ' ', 2
+        if ($key) { $settings += , @($key, "$value") }
+    }
+
+    # Effective for this repository: with core.autocrlf=true on Windows the files have CRLF line endings, and Git
+    # in the container needs the same setting, or it reports every file as changed.
+    $autocrlf = "$(& $git.Source -C $workspace config --get core.autocrlf 2>$null)".Trim()
+    if ($autocrlf) { $settings += , @('core.autocrlf', $autocrlf) }
+    return $settings
+}
+
+function Sync-HostState([string] $containerId, [string] $user, [switch] $NoProject) {
     # Copies what the app needs from this computer into the container user's home, so it runs there as it does on
-    # Windows: user secrets, NuGet feeds and their credentials, and the HTTPS development certificate. Files go
-    # through stdin as base64, one "path data" line each.
+    # Windows: user secrets, NuGet feeds and their credentials, the HTTPS development certificate and Git settings.
+    # Files go through stdin as base64, one "path data" line each; then a generated setup script runs once. Both
+    # avoid double quotes in arguments, which Windows PowerShell 5.1 passes on unescaped.
     $files = @()
-    $secretsId = Get-UserSecretsId
+    $setup = @('cd $HOME')
+    $secretsId = if ($NoProject) { $null } else { Get-UserSecretsId }
     if ($secretsId) {
         $secrets = if ($onWindows) { Join-Path $env:APPDATA "Microsoft\UserSecrets\$secretsId\secrets.json" } else { Join-Path $HOME ".microsoft/usersecrets/$secretsId/secrets.json" }
         if (Test-Path $secrets) {
@@ -288,30 +321,45 @@ function Sync-HostState([string] $containerId, [string] $user) {
     }
 
     $certificate = Get-HostDevCertificate
-    $password = $null
     if ($certificate) {
-        # Import it only when the container does not have this certificate yet.
-        $store = '.dotnet/corefx/cryptography/x509stores/my/' + $certificate.Thumbprint + '.pfx'
-        & $engine exec -u $user $containerId sh -c "test -f `$HOME/$store" 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            $password = [guid]::NewGuid().ToString('N')
-            $files += , @('.vs-devcontainer/devcert.pfx', $certificate.Export('Pfx', $password))
-            Write-Step 'Copying the HTTPS development certificate Windows trusts into the container'
-        }
+        # Imported only when the container does not have this certificate yet. --clean replaces any other
+        # development certificate, so Kestrel picks the one Windows trusts.
+        $password = [guid]::NewGuid().ToString('N')
+        $files += , @('.vs-devcontainer/devcert.pfx', $certificate.Export('Pfx', $password))
+        $setup += 'if [ ! -f .dotnet/corefx/cryptography/x509stores/my/' + $certificate.Thumbprint + '.pfx ] && command -v dotnet >/dev/null 2>&1; then'
+        $setup += '  echo ''[dev container] Importing the HTTPS development certificate Windows trusts'''
+        $setup += '  dotnet dev-certs https --clean --import .vs-devcontainer/devcert.pfx -p ' + $password + ' >/dev/null || echo ''[dev container] Importing the HTTPS development certificate failed.'''
+        $setup += 'fi'
+        $setup += 'rm -f .vs-devcontainer/devcert.pfx'
     }
 
-    if ($files.Count -eq 0) { return }
+    $gitSettings = @(Get-HostGitSettings)
+    $setup += 'if command -v git >/dev/null 2>&1; then'
+    foreach ($setting in $gitSettings) {
+        $setup += '  git config --global ' + (ConvertTo-ShellLiteral $setting[0]) + ' ' + (ConvertTo-ShellLiteral $setting[1])
+    }
+    # The workspace is mounted from Windows and belongs to another user as far as Linux knows; without this Git
+    # refuses to work in it ("detected dubious ownership").
+    $setup += '  git config --global --get-all safe.directory | grep -qx ''\*'' || git config --global --add safe.directory ''*'''
+    $setup += 'fi'
+    if ($gitSettings.Count -gt 0) { Write-Step 'Copying your Git name, email and line ending settings into the container' }
+
+    $files += , @('.vs-devcontainer/setup.sh', [System.Text.Encoding]::UTF8.GetBytes(($setup -join "`n") + "`n"))
     $lines = $files | ForEach-Object { $_[0] + ' ' + [Convert]::ToBase64String($_[1]) }
     $write = 'tr -d ''\r'' | while read p d; do mkdir -p $(dirname $HOME/$p) && echo $d | base64 -d > $HOME/$p && chmod 600 $HOME/$p || exit 1; done'
     $lines | & $engine exec -i -u $user $containerId sh -c $write
     if ($LASTEXITCODE -ne 0) { Write-Step 'Copying into the container failed; the app may miss secrets, feeds or the certificate.'; return }
 
-    if ($password) {
-        # --clean replaces any other development certificate, so Kestrel picks the one Windows trusts.
-        $import = "dotnet dev-certs https --clean --import `$HOME/.vs-devcontainer/devcert.pfx -p $password >/dev/null; s=`$?; rm -f `$HOME/.vs-devcontainer/devcert.pfx; exit `$s"
-        & $engine exec -u $user $containerId sh -c $import
-        if ($LASTEXITCODE -ne 0) { Write-Step 'Importing the HTTPS development certificate into the container failed.' }
-    }
+    & $engine exec -u $user $containerId sh -c 'sh $HOME/.vs-devcontainer/setup.sh; s=$?; rm -f $HOME/.vs-devcontainer/setup.sh; exit $s'
+    if ($LASTEXITCODE -ne 0) { Write-Step 'Setting up the container for this computer failed (see above).' }
+}
+
+if ($SyncOnly) {
+    # Called by the extension after Open in Container: the same setup as a run, without a project.
+    $engine = $EnginePath
+    if ($WorkspaceFolder) { $workspace = $WorkspaceFolder }
+    Sync-HostState $ContainerId $ContainerUser -NoProject
+    exit 0
 }
 
 if (-not (Test-Path $configFile)) { Stop-WithError "The dev container configuration $configFile was not found." }
