@@ -1,0 +1,80 @@
+name: Release
+
+# Builds the VSIX for a version tag (v0.9.0) and publishes it as a GitHub release, with that version's section of
+# CHANGELOG.md as the notes. Publishing to the Visual Studio Marketplace is a separate workflow (marketplace.yml).
+# See docs/releasing.md.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing tag to release, such as v0.9.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish the release
+    runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      DEVCONTAINERS_RELEASE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Check the tag against the version and the changelog
+        id: version
+        shell: pwsh
+        run: |
+          $version = ([xml] (Get-Content -Raw Directory.Build.props)).Project.PropertyGroup.VersionPrefix | Where-Object { $_ } | Select-Object -First 1
+          if ("v$version" -ne $env:TAG) { throw "The tag $env:TAG does not match VersionPrefix $version in Directory.Build.props." }
+          $notes = & ./build/Get-ChangelogSection.ps1 -Version $version
+          if (-not $notes) { throw "CHANGELOG.md has no section '## [$version]'." }
+          $notes | Out-File -Encoding utf8 "$env:RUNNER_TEMP\notes.md"
+          "version=$version" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          $prerelease = if ($version -match '^0\.') { 'true' } else { 'false' }
+          "prerelease=$prerelease" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: msbuild VsDevContainers.slnx /restore /p:Configuration=Release /v:minimal
+      - name: Unit tests
+        run: dotnet test tests/DevContainers.Core.Tests/DevContainers.Core.Tests.csproj -c Release --no-build
+
+      - name: Name the VSIX after the version
+        id: vsix
+        shell: pwsh
+        run: |
+          $vsix = Get-ChildItem src/DevContainers.VisualStudio/bin/Release -Recurse -Filter *.vsix | Select-Object -First 1
+          $target = Join-Path $env:RUNNER_TEMP "DevContainers.VisualStudio-${{ steps.version.outputs.version }}.vsix"
+          Copy-Item $vsix.FullName $target
+          (Get-FileHash $target -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + (Split-Path $target -Leaf) | Out-File -Encoding ascii "$target.sha256"
+          "path=$target" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DevContainers.VisualStudio-${{ steps.version.outputs.version }}
+          path: ${{ steps.vsix.outputs.path }}*
+
+      - name: Publish the GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $flags = @('--title', "Dev Containers $env:TAG", '--notes-file', "$env:RUNNER_TEMP\notes.md", '--verify-tag')
+          if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG "${{ steps.vsix.outputs.path }}" "${{ steps.vsix.outputs.path }}.sha256" --clobber
+          } else {
+            gh release create $env:TAG "${{ steps.vsix.outputs.path }}" "${{ steps.vsix.outputs.path }}.sha256" @flags
+          }

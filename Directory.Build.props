@@ -6,5 +6,16 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Authors>Joris Coenen</Authors>
     <Product>Dev Containers for Visual Studio</Product>
+
+    <!--
+      The release version, in one place. The VSIX manifest takes it from the assembly version (ExtensionAssemblyVersion).
+      Bump it in the pull request that prepares a release, together with CHANGELOG.md; the release workflow builds a
+      tag vX.Y.Z only when it matches. See docs/releasing.md.
+    -->
+    <VersionPrefix>0.9.0</VersionPrefix>
+    <!-- CI builds of pull requests and main add a suffix, so a test VSIX never looks like a release. -->
+    <VersionSuffix Condition="'$(VersionSuffix)' == '' and '$(GITHUB_ACTIONS)' == 'true' and '$(DEVCONTAINERS_RELEASE)' != 'true'">ci.$(GITHUB_RUN_NUMBER)</VersionSuffix>
+    <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
+    <FileVersion>$(VersionPrefix).$([MSBuild]::ValueOrDefault('$(GITHUB_RUN_NUMBER)', '0'))</FileVersion>
   </PropertyGroup>
 </Project>
