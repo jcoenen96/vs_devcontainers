@@ -1,24 +1,39 @@
 name: End-to-end (Visual Studio on Windows)
 
-# Installs the extension into a real Visual Studio 2026 on a Windows runner, starts Podman (Linux containers through
-# WSL2), and drives Visual Studio through UI Automation: open the sample Web API, Open in Container, Start Without
-# Debugging, call the API from Windows, stop the app and the container.
+# Installs the extension into a real Visual Studio 2026 on a Windows runner, starts a container engine (Linux
+# containers through WSL2), and drives Visual Studio through UI Automation: the sample Web API (Open in Container,
+# Start Without Debugging, Start Debugging in Container, Run Tests in Container, Stop Container) and the TypeScript
+# sample (Run and Debug npm Script in Container).
+# Pull requests run against Podman. The nightly run also runs against Docker Desktop.
 # See docs/end-to-end-tests.md.
 
 on:
   pull_request:
+  schedule:
+    - cron: '17 2 * * *'
   workflow_dispatch:
+    inputs:
+      engines:
+        description: Container engines to test, as a JSON list
+        default: '["podman", "docker-desktop"]'
 
 permissions:
   contents: read
 
 jobs:
   e2e:
-    name: Visual Studio + Podman
+    name: Visual Studio + ${{ matrix.engine == 'podman' && 'Podman' || 'Docker Desktop' }}
     runs-on: windows-2025-vs2026
-    timeout-minutes: 90
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(github.event_name == 'pull_request' && '["podman"]' || (github.event_name == 'workflow_dispatch' && inputs.engines || '["podman", "docker-desktop"]')) }}
     env:
       ARTIFACTS: ${{ github.workspace }}\e2e-artifacts
+      # The engine executable the steps below call, and the one the extension and the launcher pick.
+      ENGINE: ${{ matrix.engine == 'podman' && 'podman' || 'docker' }}
+      DEVCONTAINERS_RUNTIME: ${{ matrix.engine == 'podman' && 'podman' || 'docker' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -52,6 +67,7 @@ jobs:
         run: npm install -g @devcontainers/cli@0.90.0
 
       - name: Install Podman
+        if: matrix.engine == 'podman'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,6 +94,7 @@ jobs:
           $podman.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: Start the Podman machine (WSL2)
+        if: matrix.engine == 'podman'
         shell: pwsh
         run: |
           podman --version
@@ -86,8 +103,34 @@ jobs:
           podman version
           podman run --rm docker.io/library/alpine:3.20 uname -a
 
-      - name: Pull the sample's dev container image
-        run: podman pull mcr.microsoft.com/devcontainers/dotnet:10.0
+      - name: Install and start Docker Desktop (WSL2)
+        if: matrix.engine == 'docker-desktop'
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'DockerDesktopInstaller.exe'
+          Invoke-WebRequest 'https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe' -OutFile $installer
+          $p = Start-Process $installer -ArgumentList 'install', '--quiet', '--accept-license', '--backend=wsl-2', '--always-run-service' -Wait -PassThru
+          "Docker Desktop installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw 'Docker Desktop could not be installed.' }
+          'C:\Program Files\Docker\Docker\resources\bin' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          $env:Path = 'C:\Program Files\Docker\Docker\resources\bin;' + $env:Path
+          # The runner image may have Docker's Windows engine; Docker Desktop's Linux engine is its own context.
+          Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+          $deadline = (Get-Date).AddMinutes(10)
+          do {
+            Start-Sleep 10
+            docker context use desktop-linux 2>&1 | Out-Null
+            $os = docker version --format '{{.Server.Os}}' 2>$null
+          } until ($os -eq 'linux' -or (Get-Date) -gt $deadline)
+          if ($os -ne 'linux') { docker version 2>&1 | Out-Host; throw 'Docker Desktop did not start its Linux engine within 10 minutes.' }
+          docker version
+          docker run --rm docker.io/library/alpine:3.20 uname -a
+
+      - name: Pull the samples' dev container images
+        shell: pwsh
+        run: |
+          & $env:ENGINE pull mcr.microsoft.com/devcontainers/dotnet:10.0
+          & $env:ENGINE pull mcr.microsoft.com/devcontainers/typescript-node:22
 
       - name: Install the extension into Visual Studio
         shell: pwsh
@@ -135,8 +178,8 @@ jobs:
           while (-not $info -and -not $p.HasExited -and (Get-Date) -lt $deadline) {
             Start-Sleep 5
             # Visual Studio is not running yet, so nothing forwards the port: ask from inside the container.
-            $id = podman ps -q --filter label=devcontainer.local_folder | Select-Object -First 1
-            if ($id) { $info = podman exec $id curl -sf http://localhost:5080/api/info 2>$null }
+            $id = & $env:ENGINE ps -q --filter label=devcontainer.local_folder | Select-Object -First 1
+            if ($id) { $info = & $env:ENGINE exec $id curl -sf http://localhost:5080/api/info 2>$null }
           }
           '--- launcher output'; Get-Content $out
           '--- launcher errors'; Get-Content $err
@@ -149,16 +192,16 @@ jobs:
           # HTTPS works in the container with the development certificate of this computer: the container's
           # certificate store holds it (by thumbprint), and Kestrel serves HTTPS with it.
           $thumbprint = (Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Extensions | Where-Object { $_.Oid.Value -eq '1.3.6.1.4.1.311.84.1.1' } } | Sort-Object NotAfter -Descending | Select-Object -First 1).Thumbprint
-          $store = podman exec -u vscode $id sh -c 'ls $HOME/.dotnet/corefx/cryptography/x509stores/my/'
+          $store = & $env:ENGINE exec -u vscode $id sh -c 'ls $HOME/.dotnet/corefx/cryptography/x509stores/my/'
           "Windows development certificate: $thumbprint. In the container: $store"
           if (-not $thumbprint -or "$store" -notmatch $thumbprint) { $problems += 'The container does not have the development certificate of Windows.' }
-          $https = podman exec $id curl -sk https://localhost:5443/api/info 2>$null
+          $https = & $env:ENGINE exec $id curl -sk https://localhost:5443/api/info 2>$null
           "GET https://localhost:5443/api/info: $https"
           if ($https -notmatch '"inContainer":true') { $problems += 'The app in the container does not answer over HTTPS.' }
 
           # The app keeps running in the container after its window closes (by design); stop the container so the
           # Visual Studio test below starts from scratch and its own run is what answers.
-          podman ps -q | ForEach-Object { podman stop $_ | Out-Null }
+          & $env:ENGINE ps -q | ForEach-Object { & $env:ENGINE stop $_ | Out-Null }
           if ($problems) { throw ($problems -join ' ') }
 
       - name: Drive Visual Studio
@@ -172,12 +215,12 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          podman ps -a 2>&1 | Out-File "$env:ARTIFACTS\podman-ps.txt"
+          & $env:ENGINE ps -a 2>&1 | Out-File "$env:ARTIFACTS\containers.txt"
           if (Test-Path "$env:TEMP\servicehub\logs") { Copy-Item "$env:TEMP\servicehub\logs" "$env:ARTIFACTS\servicehub-logs" -Recurse -ErrorAction SilentlyContinue }
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: e2e-windows
+          name: e2e-windows-${{ matrix.engine }}
           path: e2e-artifacts
           if-no-files-found: ignore

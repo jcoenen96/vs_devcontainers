@@ -186,6 +186,49 @@ internal sealed class VisualStudioDriver : IDisposable
         }
     }
 
+    /// <summary>
+    /// Picks <paramref name="choice"/> on a prompt that offers choices (a button or list entry with that exact name),
+    /// waiting for the prompt to appear, then presses OK if the prompt still has one.
+    /// </summary>
+    public void Choose(string choice, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            foreach (var window in this.Dialogs())
+            {
+                var element = TryFind(() => window.FindFirstDescendant(cf => cf.ByName(choice)));
+                if (element is null)
+                {
+                    continue;
+                }
+
+                this.Press(element, $"'{choice}' in '{window.Title}'");
+                Thread.Sleep(1000);
+                var ok = TryFind(() => window.FindFirstDescendant(cf => cf.ByControlType(ControlType.Button).And(cf.ByName("OK"))));
+                if (ok is not null)
+                {
+                    this.Press(ok, $"OK in '{window.Title}'");
+                }
+
+                return;
+            }
+
+            if (DateTime.UtcNow > deadline)
+            {
+                this.Screenshot("choice-missing");
+                throw new TimeoutException($"Timed out after {timeout} waiting for a prompt offering '{choice}'.");
+            }
+
+            this.DismissKnownDialogs();
+            Thread.Sleep(2000);
+        }
+    }
+
+    /// <summary>The text of an open prompt that contains <paramref name="contains"/>, or null.</summary>
+    public string? TryReadPrompt(string contains) =>
+        this.PromptTexts().FirstOrDefault(t => t.Contains(contains, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Presses OK on the open prompt.</summary>
     public void ClosePrompt()
     {

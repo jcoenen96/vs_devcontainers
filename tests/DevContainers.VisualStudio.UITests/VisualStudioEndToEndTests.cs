@@ -112,7 +112,13 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             vs.ClickMenu("Debug", "Stop Debugging");
             await WaitUntilAsync(async () => !await IsApiAnsweringAsync(), TimeSpan.FromMinutes(1), "the debugged app to stop", vs);
 
-            // 6. Extensions > Dev Containers > Stop Container stops it.
+            // 6. Extensions > Dev Containers > Run Tests in Container runs the sample's xUnit tests in the container.
+            vs.ClickMenu("Extensions", "Dev Containers", "Run Tests in Container");
+            var tests = vs.WaitForPrompt(["All tests passed"], ["failed or could not run", "could not run"], TimeSpan.FromMinutes(10));
+            this.Log("Visual Studio said: " + tests);
+            vs.ClosePrompt();
+
+            // 7. Extensions > Dev Containers > Stop Container stops it.
             vs.ClickMenu("Extensions", "Dev Containers", "Stop Container");
             await WaitUntilAsync(
                 async () => !(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default)).Any(c => c.IsRunning),
@@ -135,6 +141,117 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
         {
             vs.SaveOutputPane();
         }
+    }
+
+    /// <summary>
+    /// The TypeScript sample, opened as a folder: Run npm Script in Container runs its dev script in the container,
+    /// the ports it opens are forwarded to Windows without being listed, and Debug npm Script in Container runs it
+    /// with the Node.js inspector, which Windows reaches too.
+    /// </summary>
+    [Fact]
+    public async Task TypeScriptSample_RunsAndDebugsInDevContainer()
+    {
+        if (Environment.GetEnvironmentVariable("DEVCONTAINERS_UITEST") != "1")
+        {
+            return;
+        }
+
+        var artifacts = Path.Combine(Environment.GetEnvironmentVariable("DEVCONTAINERS_UITEST_ARTIFACTS") ?? Path.Combine(Path.GetTempPath(), "devcontainers-uitest"), "typescript");
+        Directory.CreateDirectory(artifacts);
+        var folder = Path.Combine(FindRepository(), "samples", "typescript-node");
+        var configFile = Assert.Single(DevContainerConfigLocator.FindFromFolder(folder));
+        var runtime = await new ContainerRuntimeDetector(new ProcessRunner()).DetectAsync(ContainerRuntimePreference.Auto, null, default);
+        var engine = new ContainerEngineClient(runtime, new ProcessRunner());
+
+        using var vs = VisualStudioDriver.Launch(folder, artifacts, this.Log);
+        try
+        {
+            vs.WaitForElement("package.json", TimeSpan.FromMinutes(3), "the folder in Solution Explorer");
+            vs.Screenshot("ts-01-folder-open");
+
+            // 1. Run npm Script in Container, script 'dev': the container starts, npm installs the packages there, and
+            // the server answers on Windows' localhost:3000.
+            var runStarted = DateTime.Now;
+            vs.ClickMenu("Extensions", "Dev Containers", "Run npm Script in Container");
+            vs.Choose("dev", TimeSpan.FromMinutes(1));
+            var info = await WaitForUrlAsync("http://localhost:3000/api/info", TimeSpan.FromMinutes(20), vs);
+            vs.Screenshot("ts-02-running");
+            this.Log("GET /api/info: " + info);
+            Assert.Contains("\"inContainer\":true", info);
+            Assert.Contains("\"inspector\":null", info);
+
+            // 2. Debug npm Script in Container: the run before is replaced by one with the Node.js inspector, whose
+            // port (9229, not in forwardPorts) is detected and forwarded to Windows.
+            StopLauncherWindows(runStarted);
+            vs.ClickMenu("Extensions", "Dev Containers", "Debug npm Script in Container");
+            vs.Choose("dev", TimeSpan.FromMinutes(1));
+            var debugged = await WaitForUrlAsync("http://localhost:3000/api/info", TimeSpan.FromMinutes(5), vs, body => body.Contains("ws://0.0.0.0:9229/", StringComparison.Ordinal));
+            this.Log("GET /api/info with the inspector: " + debugged);
+            var targets = await WaitForUrlAsync("http://localhost:9229/json/list", TimeSpan.FromMinutes(1), vs);
+            this.Log("GET localhost:9229/json/list: " + targets);
+            Assert.Contains("node", targets, StringComparison.OrdinalIgnoreCase);
+
+            // Whether Visual Studio's JavaScript debugger attached by itself: reported, not asserted yet, until the
+            // attach through automation is known to work on the runner's Visual Studio (docs/end-to-end-tests.md).
+            await Task.Delay(TimeSpan.FromSeconds(20));
+            vs.Screenshot("ts-03-debugging");
+            var fallback = vs.TryReadPrompt("could not attach by itself");
+            this.Log(fallback is null
+                ? "The JavaScript debugger attached (no fallback prompt)."
+                : "::warning title=JavaScript debugger::The debugger did not attach by itself: " + fallback);
+            if (fallback is not null)
+            {
+                vs.ClosePrompt();
+            }
+            else
+            {
+                vs.ClickMenu("Debug", "Stop Debugging");
+            }
+
+            // 3. Stop Container.
+            StopLauncherWindows(runStarted);
+            vs.ClickMenu("Extensions", "Dev Containers", "Stop Container");
+            await WaitUntilAsync(
+                async () => !(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default)).Any(c => c.IsRunning),
+                TimeSpan.FromMinutes(2),
+                "the container to stop",
+                vs);
+        }
+        catch
+        {
+            vs.Screenshot("ts-failure");
+            vs.LogWindows();
+            vs.LogConsoles();
+            this.LogProcesses();
+            await this.LogContainerProcessesAsync(engine, configFile);
+            throw;
+        }
+        finally
+        {
+            vs.SaveOutputPane();
+        }
+    }
+
+    private static async Task<string> WaitForUrlAsync(string url, TimeSpan timeout, VisualStudioDriver vs, Func<string, bool>? accept = null)
+    {
+        string? body = null;
+        await WaitUntilAsync(
+            async () =>
+            {
+                try
+                {
+                    body = await Http.GetStringAsync(url);
+                    return accept is null || accept(body);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                {
+                    return false;
+                }
+            },
+            timeout,
+            url + " to answer",
+            vs);
+        return body!;
     }
 
     private static async Task<string> WaitForApiAsync(TimeSpan timeout, VisualStudioDriver vs, Func<string, bool>? accept = null)
