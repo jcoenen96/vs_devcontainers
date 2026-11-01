@@ -72,4 +72,57 @@ public class IntegrationTests
             [DevContainerState.Starting, DevContainerState.Running, DevContainerState.Starting, DevContainerState.Running, DevContainerState.Stopping, DevContainerState.Stopped],
             states);
     }
+
+    [Fact]
+    public async Task Open_ReusesContainerCreatedByAnotherTool()
+    {
+        if (Environment.GetEnvironmentVariable("DEVCONTAINERS_INTEGRATION") != "1")
+        {
+            return;
+        }
+
+        var settings = DevContainerSettings.Default with
+        {
+            Runtime = Enum.TryParse<Runtime.ContainerRuntimePreference>(Environment.GetEnvironmentVariable("DEVCONTAINERS_RUNTIME"), ignoreCase: true, out var runtime)
+                ? runtime
+                : Runtime.ContainerRuntimePreference.Auto,
+        };
+
+        using var temp = new TempFolder();
+        temp.Write(".devcontainer/devcontainer.json", """{ "image": "docker.io/library/alpine:3.20" }""");
+        var configFile = Assert.Single(DevContainerConfigLocator.FindFromFolder(temp.Path));
+        var engineRuntime = await new Runtime.ContainerRuntimeDetector(new Processes.ProcessRunner()).DetectAsync(settings.Runtime, null, default);
+        var engine = new Runtime.ContainerEngineClient(engineRuntime, new Processes.ProcessRunner());
+        var cli = new Cli.DevContainerCli(new Cli.DevContainerCliLocator().Locate(), engineRuntime, new Processes.ProcessRunner());
+
+        try
+        {
+            // Another tool (VS Code) created the container, spelling the folder differently in its labels.
+            var foreign = new Runtime.DevContainerIdentity(configFile.WorkspaceFolder + Path.DirectorySeparatorChar, configFile.ConfigPath);
+            var created = await cli.UpAsync(new Cli.UpOptions(configFile.WorkspaceFolder, configFile.ConfigPath) { Identity = foreign }, null, default);
+
+            var session = new DevContainerSession(configFile);
+            var log = new List<string>();
+            var opened = await session.OpenAsync(settings, log.Add, default);
+
+            Assert.Equal(created.ContainerId, opened.ContainerId);
+            Assert.Equal(foreign, session.Identity);
+            Assert.Contains(log, l => l.StartsWith("Reusing dev container", StringComparison.Ordinal));
+            Assert.Single(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default));
+
+            // While a VS Code server runs in the container, Visual Studio knows the container is shared.
+            Assert.False(await session.IsOpenInVsCodeAsync(settings, default));
+            var server = await new Processes.ProcessRunner().RunAsync(
+                new Processes.ProcessSpec(engineRuntime.ExecutablePath, ["exec", "-d", created.ContainerId, "sh", "-c", "mkdir -p /tmp/.vscode-server/bin && cp /bin/sleep /tmp/.vscode-server/bin/sleep && exec /tmp/.vscode-server/bin/sleep 300"]),
+                null,
+                default);
+            Assert.True(server.Succeeded, server.StandardError);
+            await Task.Delay(500);
+            Assert.True(await session.IsOpenInVsCodeAsync(settings, default));
+        }
+        finally
+        {
+            await engine.RemoveAsync(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default), default);
+        }
+    }
 }

@@ -158,6 +158,25 @@ public class CliTests
     }
 
     [Fact]
+    public async Task UpAndExec_PassIdLabels()
+    {
+        var runner = new FakeProcessRunner(_ => FakeProcessRunner.Ok("""{"outcome":"success","containerId":"c","remoteWorkspaceFolder":"/w"}"""));
+        var cli = new DevContainerCli(new DevContainerCliCommand("devcontainer", []), Docker, runner);
+        var identity = new DevContainerIdentity(@"c:\src", @"c:\src\.devcontainer\devcontainer.json");
+        string[] idLabels =
+        [
+            "--id-label", @"devcontainer.local_folder=c:\src",
+            "--id-label", @"devcontainer.config_file=c:\src\.devcontainer\devcontainer.json",
+        ];
+
+        await cli.UpAsync(new UpOptions(@"C:\src", @"C:\src\.devcontainer\devcontainer.json") { Identity = identity }, null, default);
+        var exec = cli.CreateExecSpec(@"C:\src", @"C:\src\.devcontainer\devcontainer.json", ["true"], identity);
+
+        Assert.Equal(idLabels, runner.Calls[0].Arguments.Skip(9));
+        Assert.Equal([.. idLabels, "true"], exec.Arguments.Skip(7));
+    }
+
+    [Fact]
     public void LogFormatter_PassesThroughPlainText()
     {
         Assert.Equal("plain", DevContainerLogFormatter.Format("plain"));

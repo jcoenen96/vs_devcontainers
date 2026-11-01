@@ -66,11 +66,14 @@ real containers in CI.
      --log-format json
      --docker-path <docker.exe or podman.exe>
      [--docker-compose-path <podman-compose>]
+     --id-label devcontainer.local_folder=<folder> --id-label devcontainer.config_file=<config>
      [--remove-existing-container]   # Rebuild
      [--build-no-cache]              # Rebuild Without Cache
    ```
 
-   If a container already exists for this workspace and config, `up` starts and reuses it. Otherwise it builds
+   The `--id-label` values are the labels of the folder's existing container, also one VS Code created; see
+   [Sharing the container with VS Code](#sharing-the-container-with-vs-code). If that container exists, `up`
+   starts it if needed and reuses it. Otherwise it builds
    the image, applies features, creates the container, mounts the workspace folder (by default at
    `/workspaces/<folder name>`) and runs the lifecycle hooks.
 
@@ -110,33 +113,61 @@ Cancelling from the Visual Studio progress bar kills the CLI process and all of 
 and the user's login environment applied:
 
 ```
-node devcontainer.js exec --workspace-folder <folder> --config <config> --docker-path <engine> <command...>
+node devcontainer.js exec --workspace-folder <folder> --config <config> --docker-path <engine> --id-label ... <command...>
 ```
 
+The **Dev Container** launch profile uses `exec` to run `dotnet run` in the container when you press Run; see
+[run-in-dev-container.md](run-in-dev-container.md).
+
 **Open Container Terminal** uses this to start an interactive shell in a new console window, preferring bash:
-`/bin/sh -c "if command -v bash ...; then exec bash -l; else exec sh -l; fi"`. The next steps of the plan (build,
-run and debug) will use `exec` the same way.
+`/bin/sh -c "if command -v bash ...; then exec bash -l; else exec sh -l; fi"`.
 
-## Stopping and removing
+## Sharing the container with VS Code
 
-The CLI has no `stop` or `down` command, so the extension uses labels the CLI puts on every dev container:
+Visual Studio and VS Code use one container per folder, not one each. Two containers for the same folder would
+cost twice the memory, and the IDEs would fight over the ports in `appPort`.
+
+The devcontainer CLI finds "the" container of a folder by two labels, and puts them on the containers it creates:
 
 | Label | Value |
 | --- | --- |
 | `devcontainer.local_folder` | the workspace folder on the host |
 | `devcontainer.config_file` | the path of devcontainer.json |
 
-`ContainerEngineClient` finds the container with:
+The CLI compares them as exact strings, but tools spell the same path differently. VS Code writes Windows paths
+with a lowercase drive letter (`c:\repos\app`), while Visual Studio and PowerShell use `C:\repos\app`. Left alone,
+the CLI would not see VS Code's container and would create a second one. So before `up`:
 
-```
-<engine> ps --all --filter label=devcontainer.local_folder=<folder> --filter label=devcontainer.config_file=<config> --format "{{.ID}}\t{{.State}}"
-```
+1. `ContainerEngineClient.FindDevContainersAsync` lists every dev container
+   (`<engine> ps --all --filter label=devcontainer.local_folder`) and reads their labels with one
+   `<engine> inspect`. It compares them as paths (`DevContainerIdentity.SamePath`): on Windows without case and
+   with either separator, and never with a trailing separator. Running containers come first.
+2. If one matches, its exact label values go to `up` and `exec` as `--id-label`, so the CLI uses that container.
+   **Open in Container** logs `Reusing dev container <id> (running)`.
+3. Otherwise new labels are written the way VS Code writes them (`DevContainerIdentity.ForNewContainer`, lowercase
+   drive letter), so VS Code later reuses the container Visual Studio created.
 
-For Compose based configs, the other services (a database, for example) must stop too. The client reads the
-Compose project with `<engine> inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' <id>`
-and then includes every container with `label=com.docker.compose.project=<project>`. It uses `inspect` rather
-than a `ps` label template because Docker and Podman format `ps` labels differently, while both expose the same
-`.Config.Labels` map.
+The Run button's launcher script does the same lookup in PowerShell, with
+`<engine> inspect --format '{{.State.Running}} {{json .Config.Labels}}'`.
+
+Nothing in Visual Studio stops the container behind VS Code's back:
+
+- Stopping the app (the Run button's stop) stops only the app's process group in the container; the container keeps
+  running. See [run-in-dev-container.md](run-in-dev-container.md).
+- **Stop Container** and **Rebuild Container** first check whether VS Code has the container open, and ask before
+  going on. VS Code runs its server inside the container while a window is attached, so the check is
+  `<engine> exec <id> sh -c "grep -l -s '[v]scode-server' /proc/[0-9]*/cmdline | head -n 1"` (the brackets keep
+  grep from matching itself).
+
+## Stopping and removing
+
+The CLI has no `stop` or `down` command, so the extension finds the container by its labels, as described in
+[Sharing the container with VS Code](#sharing-the-container-with-vs-code), and uses the engine's CLI.
+
+For Compose based configs, the other services (a database, for example) must stop too. The same `inspect` call
+reads the `com.docker.compose.project` label, and the client then includes every container with
+`label=com.docker.compose.project=<project>`. It uses `inspect` rather than a `ps` label template because Docker
+and Podman format `ps` labels differently, while both expose the same `.Config.Labels` map.
 
 **Stop Container** runs `<engine> stop` on the running ones, which keeps the container so the next open is fast.
 Removal (`<engine> rm --force`) is used for cleanup. Rebuilding goes through `up --remove-existing-container`.
@@ -191,8 +222,9 @@ engine path, and devcontainer CLI path (to `devcontainer.js`).
 ## Testing the integration
 
 - Unit tests (`tests/DevContainers.Core.Tests`) cover the CLI arguments, result parsing, log formatting, CLI and
-  engine discovery, and Compose stop, using a fake process runner.
-- `IntegrationTests` runs a real container through open, exec, reopen and stop when
+  engine discovery, label matching and Compose stop, using a fake process runner.
+- `IntegrationTests` runs a real container through open, exec, reopen and stop, and checks that a container
+  created with differently spelled labels (as VS Code would) is reused and detected as open in VS Code, when
   `DEVCONTAINERS_INTEGRATION=1` is set. `DEVCONTAINERS_RUNTIME=docker|podman` picks the engine. CI runs it
   against both.
 

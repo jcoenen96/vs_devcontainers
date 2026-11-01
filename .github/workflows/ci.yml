@@ -37,6 +37,28 @@ jobs:
           dotnet build samples/dotnet-console/HelloContainer.slnx
           dotnet build samples/dotnet-webapi/HelloApi.slnx
 
+  run-sample:
+    name: Run sample API in its dev container
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli@0.90.0
+      - name: Start HelloApi with the Dev Container launch profile's script
+        working-directory: samples/dotnet-webapi/HelloApi
+        run: |
+          nohup pwsh -NoProfile -File ../.devcontainer/vs-run.ps1 -LaunchProfile http > "$RUNNER_TEMP/run.log" 2>&1 &
+          for i in $(seq 1 150); do
+            if curl -sf http://localhost:5080/api/info > "$RUNNER_TEMP/info.json"; then break; fi
+            sleep 4
+          done
+          cat "$RUNNER_TEMP/run.log"
+          cat "$RUNNER_TEMP/info.json"
+          grep -q '"inContainer":true' "$RUNNER_TEMP/info.json"
+
   vsix:
     name: Build VSIX
     runs-on: windows-latest

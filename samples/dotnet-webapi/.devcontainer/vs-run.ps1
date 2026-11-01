@@ -1,0 +1,237 @@
+<#
+.SYNOPSIS
+    Runs a .NET project inside the dev container defined next to this script.
+
+.DESCRIPTION
+    The "Dev Container" launch profile in Properties/launchSettings.json runs this script, so the Run button in
+    Visual Studio starts the app inside the container. It:
+      1. checks for Node.js and the devcontainer CLI and offers to install them (winget and npm),
+      2. finds a running Docker or Podman,
+      3. starts the dev container with "devcontainer up": it reuses the container of this folder, also one that
+         VS Code created and may have open, and builds one only the first time,
+      4. stops the app if a previous run is still going in the container,
+      5. runs "dotnet run" for the project inside the container, in this window.
+
+    Stopping the app never stops the container, so VS Code and Visual Studio can share it.
+
+    Added by the Dev Containers extension for Visual Studio. Commit it with the project so the profile works
+    right after cloning. It works on Windows PowerShell 5.1 and PowerShell 7.
+
+.PARAMETER LaunchProfile
+    A launch profile of the project (commandName "Project") for dotnet run to use inside the container, for its
+    applicationUrl and environment variables. Leave empty to run without a launch profile.
+
+.PARAMETER Project
+    The project folder or .csproj. Defaults to the current folder, which the launch profile sets to the project.
+
+.PARAMETER Config
+    The devcontainer.json to use. Defaults to the one next to this script. The workspace folder is always the
+    folder that holds this script's .devcontainer folder.
+
+.PARAMETER AppArgs
+    Arguments passed to the app.
+#>
+[CmdletBinding()]
+param(
+    [string] $LaunchProfile = '',
+    [string] $Project = '',
+    [string] $Config = '',
+    [string[]] $AppArgs = @()
+)
+
+# Native tools report failure through exit codes, which are checked below. 'Stop' would turn their stderr output
+# into errors on Windows PowerShell 5.1.
+$ErrorActionPreference = 'Continue'
+# DEVCONTAINERS_RUN_LOG=<file> keeps a transcript of the run, for diagnosing a window that closed too fast.
+if ($env:DEVCONTAINERS_RUN_LOG) { Start-Transcript -Path $env:DEVCONTAINERS_RUN_LOG -Append | Out-Null }
+$onWindows = $env:OS -eq 'Windows_NT'
+$workspace = Split-Path -Parent $PSScriptRoot
+$configFile = if ($Config) { $Config } else { Join-Path $PSScriptRoot 'devcontainer.json' }
+
+function Write-Step([string] $text) {
+    Write-Host "[dev container] $text" -ForegroundColor Cyan
+}
+
+function Stop-WithError([string] $text) {
+    Write-Host "[dev container] $text" -ForegroundColor Red
+    exit 1
+}
+
+function Update-PathFromRegistry {
+    # Tools installed by winget or npm are not on this window's PATH until it is reloaded.
+    if ($onWindows) {
+        $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+            [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + $env:Path
+    }
+}
+
+function Find-DevContainerCli {
+    $command = Get-Command devcontainer -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command) { return $null }
+
+    $path = $command.Source
+    if ($path -match '\.(cmd|ps1)$') {
+        # npm's shims go through cmd.exe or a script. Run the CLI's own entry point with node instead, so the
+        # arguments reach it unchanged.
+        $script = Join-Path (Split-Path -Parent $path) 'node_modules\@devcontainers\cli\devcontainer.js'
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ((Test-Path $script) -and $node) { return @{ File = $node.Source; Prefix = @($script) } }
+        return $null
+    }
+
+    return @{ File = $path; Prefix = @() }
+}
+
+function Install-Prerequisites {
+    $nodeMissing = -not (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)
+    $commands = @()
+    if ($nodeMissing) {
+        $commands += 'winget install --id OpenJS.NodeJS.LTS --exact --source winget --accept-source-agreements --accept-package-agreements'
+    }
+    $commands += 'npm install -g @devcontainers/cli'
+
+    Write-Host ''
+    Write-Host 'Running the app in its dev container needs Node.js and the devcontainer CLI, which are not installed.' -ForegroundColor Yellow
+    Write-Host 'They can be installed with:'
+    $commands | ForEach-Object { Write-Host "    $_" }
+    Write-Host ''
+
+    if ($nodeMissing -and -not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Stop-WithError 'winget (App Installer) was not found. Install Node.js LTS from https://nodejs.org, run the npm command above, then start the app again.'
+    }
+
+    $answer = Read-Host 'Install them now? [Y/n]'
+    if ($answer -and $answer -notmatch '^(y|yes)$') {
+        Stop-WithError 'Not installed. Run the commands above, then start the app again.'
+    }
+
+    foreach ($command in $commands) {
+        Write-Step $command
+        Invoke-Expression $command
+        if ($LASTEXITCODE -ne 0) { Stop-WithError "'$command' failed with exit code $LASTEXITCODE." }
+        Update-PathFromRegistry
+    }
+}
+
+function Find-ContainerEngine {
+    # DEVCONTAINERS_RUNTIME=docker or podman picks one; otherwise Docker is preferred when it is running.
+    $names = if ($env:DEVCONTAINERS_RUNTIME) { @($env:DEVCONTAINERS_RUNTIME) } else { @('docker', 'podman') }
+    foreach ($name in $names) {
+        $command = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $command) { continue }
+        $version, $os = "$(& $command.Source version --format '{{.Server.Version}} {{.Server.Os}}' 2>$null)" -split ' ', 2
+        # An engine in Windows containers mode cannot run dev containers, which are Linux containers.
+        if ($LASTEXITCODE -eq 0 -and $version -and $os -ne 'windows') {
+            Write-Step "Using $name $version"
+            return $command.Source
+        }
+    }
+
+    Stop-WithError ('No running container engine was found (tried ' + ($names -join ', ') + '). Start Docker Desktop or Podman and run again.')
+}
+
+function ConvertTo-LabelPath([string] $path) {
+    # Label paths compare as paths: on Windows without case and with either separator, never with a trailing one.
+    if ($onWindows) { $path = $path.Replace('/', '\') }
+    $separator = if ($onWindows) { '\' } else { '/' }
+    $trimmed = $path.TrimEnd($separator)
+    if ($trimmed.Length -eq 0 -or ($onWindows -and $trimmed -match '^[A-Za-z]:$')) { return $trimmed + $separator }
+    return $trimmed
+}
+
+function Test-SamePath([string] $a, [string] $b) {
+    if (-not $a -or -not $b) { return $false }
+    $a = ConvertTo-LabelPath $a
+    $b = ConvertTo-LabelPath $b
+    if ($onWindows) { return $a -ieq $b }
+    return $a -ceq $b
+}
+
+function Get-DevContainerIdLabels {
+    # The devcontainer CLI finds "the" container of a folder by its labels. VS Code writes C:\ as c:\, so the exact
+    # labels of an existing container (VS Code's included) are looked up and passed with --id-label; the CLI then
+    # reuses that container instead of creating a second one. A new container gets labels the way VS Code writes
+    # them, so VS Code reuses it too.
+    $folderLabel = 'devcontainer.local_folder'
+    $configLabel = 'devcontainer.config_file'
+    $ids = @(& $engine ps -a --filter "label=$folderLabel" --format '{{.ID}}' 2>$null | Where-Object { $_ })
+    if ($LASTEXITCODE -eq 0 -and $ids.Count -gt 0) {
+        $found = $null
+        foreach ($line in @(& $engine inspect --format '{{.State.Running}} {{json .Config.Labels}}' $ids 2>$null)) {
+            $running, $json = "$line" -split ' ', 2
+            if (-not $json) { continue }
+            $labels = $json | ConvertFrom-Json
+            $folder = $labels.$folderLabel
+            $config = $labels.$configLabel
+            if (-not $config -or -not (Test-SamePath $folder $workspace) -or -not (Test-SamePath $config $configFile)) { continue }
+            if (-not $found -or $running -eq 'true') { $found = @($folder, $config) }
+            if ($running -eq 'true') { break }
+        }
+
+        if ($found) {
+            Write-Step "Reusing the existing dev container of this folder"
+            return @('--id-label', "$folderLabel=$($found[0])", '--id-label', "$configLabel=$($found[1])")
+        }
+    }
+
+    $folder = ConvertTo-LabelPath $workspace
+    $config = ConvertTo-LabelPath $configFile
+    if ($onWindows) {
+        $folder = $folder.Substring(0, 1).ToLowerInvariant() + $folder.Substring(1)
+        $config = $config.Substring(0, 1).ToLowerInvariant() + $config.Substring(1)
+    }
+
+    return @('--id-label', "$folderLabel=$folder", '--id-label', "$configLabel=$config")
+}
+
+function Invoke-DevContainer([string[]] $arguments) {
+    & $cli.File @($cli.Prefix + $arguments)
+}
+
+if (-not (Test-Path $configFile)) { Stop-WithError "The dev container configuration $configFile was not found." }
+$configFile = (Resolve-Path $configFile).Path
+
+$projectPath = if ($Project) { $Project } else { (Get-Location).Path }
+$projectPath = (Resolve-Path $projectPath).Path
+if (-not $projectPath.StartsWith($workspace, [StringComparison]::OrdinalIgnoreCase)) {
+    Stop-WithError "The project ($projectPath) is not inside the dev container's folder ($workspace)."
+}
+
+# Path of the project relative to the workspace folder, which is where commands start inside the container.
+$relativeProject = $projectPath.Substring($workspace.Length).TrimStart('\', '/').Replace('\', '/')
+if (-not $relativeProject) { $relativeProject = '.' }
+
+$cli = Find-DevContainerCli
+if (-not $cli) {
+    Install-Prerequisites
+    $cli = Find-DevContainerCli
+    if (-not $cli) { Stop-WithError 'The devcontainer CLI still cannot be found. Open a new window or restart Visual Studio, then run again.' }
+}
+
+$engine = Find-ContainerEngine
+$common = @('--workspace-folder', $workspace, '--config', $configFile, '--docker-path', $engine) + (Get-DevContainerIdLabels)
+
+Write-Step "Starting the dev container for $workspace (the first time this builds it, which takes a while)"
+$upOutput = Invoke-DevContainer (@('up') + $common)
+if ($LASTEXITCODE -ne 0) {
+    Stop-WithError ("devcontainer up failed: " + ($upOutput | Select-Object -Last 1))
+}
+
+# A run stopped from Visual Studio ends this window but not the app inside the container. Stop it, so the port is
+# free again. Each run records its process group in a pid file. (No "--" before the group: dash, the sh of
+# Debian based images, rejects it.)
+$pidFile = '/tmp/vs-run-' + (($relativeProject -replace '[^A-Za-z0-9_.-]', '_').Trim('.')) + '.pid'
+$stopPrevious = "if [ -f $pidFile ]; then kill -TERM -`$(cat $pidFile) 2>/dev/null && sleep 1; rm -f $pidFile; fi; true"
+Invoke-DevContainer (@('exec') + $common + @('sh', '-c', $stopPrevious)) | Out-Null
+
+# Build into the container's own file system, not obj/ and bin/ in the mounted folder: Windows bind mounts (Podman and
+# Docker through WSL) do not let the container user set file times there, which fails the build (MSB3374), and
+# Visual Studio's own builds on the host use those folders too. (No quotes: Windows PowerShell passes them on
+# unescaped.)
+$run = "dotnet run --project '$relativeProject' --property:UseArtifactsOutput=true --property:ArtifactsPath=`$HOME/.vs-devcontainer/build"
+$run += if ($LaunchProfile) { " --launch-profile '$LaunchProfile'" } else { ' --no-launch-profile' }
+if ($AppArgs.Count -gt 0) { $run += ' -- ' + (($AppArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' ') }
+
+Write-Step "Running in the container: $run"
+Invoke-DevContainer (@('exec') + $common + @('setsid', '-w', 'sh', '-c', "echo `$`$ > $pidFile; exec $run"))
+exit $LASTEXITCODE

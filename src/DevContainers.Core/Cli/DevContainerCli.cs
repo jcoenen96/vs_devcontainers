@@ -12,6 +12,12 @@ public sealed record UpOptions(string WorkspaceFolder, string ConfigPath)
 
     /// <summary>Build the image without the layer cache (Rebuild Without Cache).</summary>
     public bool BuildNoCache { get; init; }
+
+    /// <summary>
+    /// The labels that find (or, for a new container, are put on) the container. Passing the labels of an existing
+    /// container makes <c>up</c> reuse it, even when another tool spelled the path differently.
+    /// </summary>
+    public DevContainerIdentity? Identity { get; init; }
 }
 
 /// <summary>What <c>devcontainer up</c> reports on success.</summary>
@@ -40,6 +46,7 @@ public sealed class DevContainerCli(DevContainerCliCommand command, ContainerRun
             "--log-format", "json",
         };
         args.AddRange(this.RuntimeArguments());
+        args.AddRange(options.Identity?.ToCliArguments() ?? []);
         if (options.RemoveExistingContainer)
         {
             args.Add("--remove-existing-container");
@@ -60,14 +67,15 @@ public sealed class DevContainerCli(DevContainerCliCommand command, ContainerRun
         string configPath,
         IReadOnlyList<string> command,
         IProcessOutputSink? sink,
-        CancellationToken cancellationToken) =>
-        runner.RunAsync(this.CreateExecSpec(workspaceFolder, configPath, command), sink, cancellationToken);
+        CancellationToken cancellationToken,
+        DevContainerIdentity? identity = null) =>
+        runner.RunAsync(this.CreateExecSpec(workspaceFolder, configPath, command, identity), sink, cancellationToken);
 
     /// <summary>
     /// Builds the <c>devcontainer exec</c> command line without running it, for callers that need their own
     /// process (an interactive terminal window).
     /// </summary>
-    public ProcessSpec CreateExecSpec(string workspaceFolder, string configPath, IReadOnlyList<string> command)
+    public ProcessSpec CreateExecSpec(string workspaceFolder, string configPath, IReadOnlyList<string> command, DevContainerIdentity? identity = null)
     {
         if (command.Count == 0)
         {
@@ -81,6 +89,7 @@ public sealed class DevContainerCli(DevContainerCliCommand command, ContainerRun
             "--config", configPath,
         };
         args.AddRange(this.RuntimeArguments());
+        args.AddRange(identity?.ToCliArguments() ?? []);
         args.AddRange(command);
         return this.CreateSpec(args);
     }

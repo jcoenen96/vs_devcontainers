@@ -15,5 +15,6 @@
   "DevContainers.Settings.RuntimePath": "Container engine path",
   "DevContainers.Settings.RuntimePath.Description": "Full path to docker.exe or podman.exe. Leave empty to use the one on PATH.",
   "DevContainers.Settings.CliPath": "devcontainer CLI path",
-  "DevContainers.Settings.CliPath.Description": "Full path to devcontainer.js from @devcontainers/cli. Leave empty to find it on PATH or in the global npm folder."
+  "DevContainers.Settings.CliPath.Description": "Full path to devcontainer.js from @devcontainers/cli. Leave empty to find it on PATH or in the global npm folder.",
+  "DevContainers.AddLaunchProfile.DisplayName": "Add Run Profile for Dev Container"
 }
