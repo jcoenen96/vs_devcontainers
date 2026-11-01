@@ -66,6 +66,12 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             Assert.True(git.Succeeded, git.StandardError);
             Assert.StartsWith("Dev Container Tester", git.StandardOutput.Trim());
 
+            // The status window shows the container as running (a progress signal and a screenshot, not an assertion:
+            // tool window content is reached through UI Automation differently between Visual Studio versions).
+            vs.ClickMenu("Extensions", "Dev Containers", "Show Dev Container Status");
+            vs.WaitForElement("Dev Container: running", TimeSpan.FromSeconds(30), "the status window's title");
+            vs.Screenshot("02b-status-window");
+
             // 3. Debug > Start Without Debugging runs the app inside the container; the host reaches it on port 5080,
             // which the extension forwards (forwardPorts) while the container runs.
             // Nothing answers before that, so the answer below comes from this run.

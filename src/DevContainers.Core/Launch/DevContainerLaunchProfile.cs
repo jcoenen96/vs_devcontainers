@@ -54,16 +54,20 @@ public static class DevContainerLaunchProfile
             : new JsonObject { ["$schema"] = "https://json.schemastore.org/launchsettings.json" };
 
         var existing = root["profiles"] as JsonObject ?? [];
-        var inner = existing
+        var projectProfiles = existing
             .Where(p => p.Key != ProfileName && p.Value?["commandName"]?.GetValue<string>() == "Project")
             .Select(p => p.Key)
-            .FirstOrDefault();
+            .ToList();
+        var customizations = ReadCustomizations(config.ConfigPath);
+
+        // customizations.visualstudio.launchProfile picks the profile whose settings apply in the container.
+        var inner = customizations.LaunchProfile is { } wanted && projectProfiles.Contains(wanted) ? wanted : projectProfiles.FirstOrDefault();
 
         // Visual Studio selects the first profile when nobody picked one yet, so after cloning the Run button
         // starts the app in the container.
         var profiles = new JsonObject
         {
-            [ProfileName] = CreateProfile(projectFolder, scriptPath, workspace, config.ConfigPath, inner),
+            [ProfileName] = CreateProfile(projectFolder, scriptPath, workspace, config.ConfigPath, inner, customizations.HotReload),
         };
         foreach (var (name, value) in existing.Where(p => p.Key != ProfileName).ToList())
         {
@@ -77,7 +81,7 @@ public static class DevContainerLaunchProfile
         return new LaunchProfileResult(scriptPath, settingsPath, inner);
     }
 
-    internal static JsonObject CreateProfile(string projectFolder, string scriptPath, string workspace, string configPath, string? innerProfile)
+    internal static JsonObject CreateProfile(string projectFolder, string scriptPath, string workspace, string configPath, string? innerProfile, bool hotReload = false)
     {
         // $(ProjectDir) is expanded by Visual Studio and ends with a backslash. Paths stay relative to it, so the
         // profile works wherever the repository is cloned.
@@ -94,6 +98,11 @@ public static class DevContainerLaunchProfile
             arguments += $" -LaunchProfile \"{innerProfile}\"";
         }
 
+        if (hotReload)
+        {
+            arguments += " -Watch";
+        }
+
         return new JsonObject
         {
             ["commandName"] = "Executable",
@@ -101,6 +110,18 @@ public static class DevContainerLaunchProfile
             ["commandLineArgs"] = arguments,
             ["workingDirectory"] = "$(ProjectDir)",
         };
+    }
+
+    private static VisualStudioCustomizations ReadCustomizations(string configPath)
+    {
+        try
+        {
+            return DevContainerConfig.Load(configPath).VisualStudio;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return VisualStudioCustomizations.Empty;
+        }
     }
 
     private static string RelativeWindowsPath(string from, string to) =>

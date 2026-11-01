@@ -53,6 +53,12 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
         }
     }
 
+    /// <summary>The open solution's dev container as last checked, for the status window.</summary>
+    public ContainerStatus Status { get; private set; } = ContainerStatus.None;
+
+    /// <summary>Raised when <see cref="Status"/> changes.</summary>
+    public event EventHandler<ContainerStatus>? StatusChanged;
+
     /// <summary>Checks the open solution's dev container now, for example right after Open in Container.</summary>
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
@@ -64,22 +70,22 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
             if (configFile is null || config is null)
             {
                 this.Stop();
-                return;
-            }
-
-            var listed = config.ForwardPorts
-                .Select(p => PortSpec.TryParse(p, out var spec) ? spec : null)
-                .OfType<PortSpec>()
-                .Distinct()
-                .ToList();
-            if (listed.Count == 0 && !config.AutoForwardPorts)
-            {
-                this.Stop();
+                this.Publish(configFile is null ? ContainerStatus.None : this.Status with { Problem = "devcontainer.json cannot be read (being edited?)." });
                 return;
             }
 
             var settings = await devContainers.ReadSettingsAsync(cancellationToken);
-            this.runtime ??= await new ContainerRuntimeDetector(new ProcessRunner()).DetectAsync(settings.Runtime, settings.RuntimePath, cancellationToken);
+            try
+            {
+                this.runtime ??= await new ContainerRuntimeDetector(new ProcessRunner()).DetectAsync(settings.Runtime, settings.RuntimePath, cancellationToken);
+            }
+            catch (ContainerRuntimeNotFoundException ex)
+            {
+                this.Stop();
+                this.Publish(new ContainerStatus(configFile, null, null, false, [], ex.Message));
+                throw;
+            }
+
             var engine = new ContainerEngineClient(this.runtime, new ProcessRunner());
             var container = (await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, cancellationToken)).FirstOrDefault(c => c.IsRunning);
             var log = await devContainers.GetLogAsync(cancellationToken);
@@ -91,6 +97,20 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
                     log("Stopped forwarding ports: the dev container stopped.");
                 }
 
+                this.Publish(new ContainerStatus(configFile, this.runtime, null, false, [], null));
+                devContainers.OfferToOpenOnLoad(configFile, config.VisualStudio);
+                return;
+            }
+
+            var listed = config.ForwardPorts
+                .Select(p => PortSpec.TryParse(p, out var spec) ? spec : null)
+                .OfType<PortSpec>()
+                .Distinct()
+                .ToList();
+            if (listed.Count == 0 && !config.AutoForwardPorts)
+            {
+                this.Stop();
+                this.Publish(new ContainerStatus(configFile, this.runtime, container.Id, true, [], null));
                 return;
             }
 
@@ -135,12 +155,27 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
                 }
             }
 
-            this.Ports = this.forwarder.Forwarded.Select(p => new ForwardedPort(p, true, null)).ToList();
+            this.Ports = this.forwarder.Forwarded.Select(p => new ForwardedPort(p, true, null))
+                .Concat(this.failed.Select(p => new ForwardedPort(p, false, "in use on this computer")))
+                .OrderBy(p => p.Spec.Port)
+                .ToList();
+            this.Publish(new ContainerStatus(configFile, this.runtime, container.Id, true, this.Ports, null));
         }
         finally
         {
             this.gate.Release();
         }
+    }
+
+    private void Publish(ContainerStatus status)
+    {
+        if (status.Equals(this.Status))
+        {
+            return;
+        }
+
+        this.Status = status;
+        this.StatusChanged?.Invoke(this, status);
     }
 
     public void Dispose()
@@ -170,4 +205,27 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
         this.failed.Clear();
         this.Ports = [];
     }
+}
+
+/// <summary>The open solution's dev container, as the port forwarding last saw it.</summary>
+/// <param name="ConfigFile">The configuration, or null when the solution has none.</param>
+/// <param name="Runtime">The container engine.</param>
+/// <param name="ContainerId">The running container, or null.</param>
+/// <param name="IsRunning">Whether it runs.</param>
+/// <param name="Ports">The forwarded ports, and the ones that could not be forwarded.</param>
+/// <param name="Problem">What keeps the check from working, if anything.</param>
+internal sealed record ContainerStatus(DevContainerConfigFile? ConfigFile, ContainerRuntime? Runtime, string? ContainerId, bool IsRunning, IReadOnlyList<ForwardedPort> Ports, string? Problem)
+{
+    public static ContainerStatus None { get; } = new(null, null, null, false, [], null);
+
+    public bool Equals(ContainerStatus? other) =>
+        other is not null
+        && this.ConfigFile?.ConfigPath == other.ConfigFile?.ConfigPath
+        && this.Runtime?.Kind == other.Runtime?.Kind
+        && this.ContainerId == other.ContainerId
+        && this.IsRunning == other.IsRunning
+        && this.Problem == other.Problem
+        && this.Ports.SequenceEqual(other.Ports);
+
+    public override int GetHashCode() => HashCode.Combine(this.ConfigFile?.ConfigPath, this.ContainerId, this.IsRunning, this.Ports.Count);
 }

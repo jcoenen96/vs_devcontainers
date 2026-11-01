@@ -19,6 +19,7 @@ internal static class DevContainerMenu
             MenuChild.Command<RunNpmScriptInContainerCommand>(),
             MenuChild.Command<DebugNpmScriptInContainerCommand>(),
             MenuChild.Command<OpenTerminalCommand>(),
+            MenuChild.Command<ShowStatusCommand>(),
             MenuChild.Command<AddLaunchProfileCommand>(),
             MenuChild.Separator,
             MenuChild.Command<RebuildContainerCommand>(),
@@ -132,4 +133,16 @@ internal sealed class AddLaunchProfileCommand(DevContainerService service) : Com
 
     public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
         service.AddLaunchProfileAsync(cancellationToken);
+}
+
+[VisualStudioContribution]
+internal sealed class ShowStatusCommand : Command
+{
+    public override CommandConfiguration CommandConfiguration => new("%DevContainers.ShowStatus.DisplayName%")
+    {
+        Icon = new(ImageMoniker.KnownValues.StatusInformation, IconSettings.IconAndText),
+    };
+
+    public override Task ExecuteCommandAsync(IClientContext context, CancellationToken cancellationToken) =>
+        this.Extensibility.Shell().ShowToolWindowAsync<ToolWindows.DevContainerStatusWindow>(activate: true, cancellationToken);
 }
