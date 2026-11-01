@@ -53,6 +53,9 @@ public sealed class DevContainerConfig
     /// <summary>The raw <c>customizations.visualstudio</c> section, if any, for tool specific settings.</summary>
     public JsonElement? VisualStudioCustomizations { get; private init; }
 
+    /// <summary>The <c>customizations.visualstudio</c> settings this extension knows.</summary>
+    public VisualStudioCustomizations VisualStudio => Configuration.VisualStudioCustomizations.Read(this.VisualStudioCustomizations);
+
     public static DevContainerConfig Load(string path) => Parse(File.ReadAllText(path));
 
     /// <summary>Parses devcontainer.json content, which is JSON with comments and trailing commas.</summary>

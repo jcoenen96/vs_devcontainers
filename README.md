@@ -66,6 +66,7 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 | Run npm Script in Container | Runs a `package.json` script (such as `dev` or `start`) of a TypeScript or Node.js app inside the container, in its own window. See [docs/typescript.md](docs/typescript.md). |
 | Debug npm Script in Container | The same with the Node.js inspector on, and attaches Visual Studio's JavaScript debugger to it. |
 | Open Container Terminal | Opens a shell inside the running container, with the container's `remoteEnv` and user. |
+| Show Dev Container Status | A tool window with the container's state, engine and forwarded ports, and buttons for the common commands. Its tab title shows whether the container runs. |
 | Add Run Profile for Dev Container | Adds a **Dev Container** launch profile to a project, so the Run button builds and runs it inside the container. See [docs/run-in-dev-container.md](docs/run-in-dev-container.md). |
 | Rebuild Container | Removes the container and creates it again from the current config. Asks first when VS Code has it open. |
 | Rebuild Container Without Cache | The same, building the image with `--no-cache`. |
@@ -75,7 +76,10 @@ The full log is in the **Dev Containers** pane of the Output window. When someth
 what to do next and offers to fix it when it can (start the engine, open or rebuild the container); see
 [docs/troubleshooting.md](docs/troubleshooting.md). **Open in Container** also checks that the .NET SDK on Windows,
 which IntelliSense uses, and the one in the container can both handle the projects; see
-[docs/intellisense.md](docs/intellisense.md).
+[docs/intellisense.md](docs/intellisense.md). Per-repository settings (the startup project, Hot Reload, offering
+to open the container when the solution loads) go in `customizations.visualstudio`; see
+[docs/customizations.md](docs/customizations.md). Builds feel slow? [docs/performance.md](docs/performance.md)
+explains where the time goes and what helps, including keeping the repository inside WSL.
 
 Settings are under **Tools > Options > Dev Containers**: container engine (Automatic, Docker or Podman), and
 paths to the engine and the CLI when they are not on PATH. Automatic uses Docker when it is running and falls
@@ -166,5 +170,6 @@ it also lists what the extension copies into containers.
    (done), and Visual Studio's debugger debugs it there (done).
 3. **TypeScript inner loop** (done): run TypeScript and Node.js apps (their npm scripts) inside the container,
    attach Visual Studio's JavaScript debugger to them, and forward the ports they open.
-4. **Parity and Marketplace:** a `customizations.visualstudio` section, Marketplace packaging.
+4. **Parity and Marketplace:** a `customizations.visualstudio` section, a status window and Hot Reload (done),
+   Marketplace packaging.
    The CLI stays a separate install; the extension never bundles it.

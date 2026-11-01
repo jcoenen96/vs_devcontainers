@@ -158,6 +158,8 @@ not adjusted for the container. Run the app host on Windows for now.
   debug, use **Extensions > Dev Containers > Start Debugging in Container**; see [debugging.md](debugging.md).
 - **.NET projects.** For TypeScript and Node.js apps, use **Run npm Script in Container**; see
   [typescript.md](typescript.md).
+- **Hot Reload:** add `-Watch` to the profile (or set `hotReload` in
+  [customizations.visualstudio](customizations.md#hot-reload)) to run the app with `dotnet watch`.
 - **`launchBrowser`** is ignored: no browser opens. Open the forwarded URL yourself.
 
 ## Tested

@@ -42,6 +42,11 @@
 .PARAMETER InspectPort
     With -Npm: start Node.js with --inspect on this port of the container, so a debugger can attach to it
     through the forwarded port.
+
+.PARAMETER Watch
+    Run a .NET project with dotnet watch (Hot Reload): code changes saved in Visual Studio apply to the running app,
+    and it restarts for changes Hot Reload cannot apply. Files are polled, because changes made on Windows do not
+    reach the container as file system events.
 #>
 [CmdletBinding()]
 param(
@@ -53,6 +58,8 @@ param(
     [string] $Npm = '',
     # With -Npm: start Node.js with its inspector on this port (0 = off), for attaching a debugger.
     [int] $InspectPort = 0,
+    # A .NET project: run it with dotnet watch (Hot Reload).
+    [switch] $Watch,
     # Used by the extension: copy this computer's settings into a running container, then exit.
     [switch] $SyncOnly,
     [string] $EnginePath = '',
@@ -580,7 +587,9 @@ if ($Npm) {
     }
 
     # HOST: dev servers that read it (Create React App, Nuxt and others) listen on every interface of the container.
-    Invoke-DevContainer (@('exec') + $common + @('setsid', '-w', 'sh', '-c', "echo `$`$ > $pidFile; cd $folder || exit 1; export HOST=0.0.0.0; $install; $run"))
+    # CHOKIDAR_USEPOLLING, WATCHPACK_POLLING: watchers (Vite, webpack, nodemon) poll, since changes saved on Windows
+    # reach the container without file system events.
+    Invoke-DevContainer (@('exec') + $common + @('setsid', '-w', 'sh', '-c', "echo `$`$ > $pidFile; cd $folder || exit 1; export HOST=0.0.0.0 CHOKIDAR_USEPOLLING=true WATCHPACK_POLLING=true; $install; $run"))
     exit $LASTEXITCODE
 }
 
@@ -628,9 +637,17 @@ if ($launchSettings) {
 $arguments += @($AppArgs | ForEach-Object { ConvertTo-ShellLiteral $_ })
 
 $run = "dotnet run --no-build --project '$relativeProject' $artifacts --no-launch-profile"
+if ($Watch) {
+    # dotnet watch builds by itself and again after each change. Changes saved on Windows reach a Linux container
+    # without file system events (WSL 2 and Podman machine mounts), so it polls.
+    $build = 'true'
+    $environment += 'DOTNET_USE_POLLING_FILE_WATCHER=1'
+    $environment += 'DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER=1'
+    $run = "dotnet watch run --project '$relativeProject' $artifacts --no-launch-profile --non-interactive"
+}
 if ($environment.Count -gt 0) { $run = 'env ' + (($environment | ForEach-Object { ConvertTo-ShellLiteral $_ }) -join ' ') + ' ' + $run }
 if ($arguments.Count -gt 0) { $run += ' -- ' + ($arguments -join ' ') }
 
-Write-Step ("Running in the container: " + $(if ($LaunchProfile) { "$relativeProject with the '$LaunchProfile' profile" } else { $relativeProject }))
+Write-Step ("Running in the container" + $(if ($Watch) { ' with Hot Reload (dotnet watch)' } else { '' }) + ': ' + $(if ($LaunchProfile) { "$relativeProject with the '$LaunchProfile' profile" } else { $relativeProject }))
 Invoke-DevContainer (@('exec') + $common + @('setsid', '-w', 'sh', '-c', "echo `$`$ > $pidFile; $build; exec $run"))
 exit $LASTEXITCODE

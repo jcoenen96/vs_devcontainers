@@ -36,6 +36,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Remote UI: the XAML goes to Visual Studio as data, so it is an embedded resource named after its control. -->
+    <EmbeddedResource Include="ToolWindows\DevContainerStatusControl.xaml" LogicalName="$(RootNamespace).ToolWindows.DevContainerStatusControl.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\DevContainers.Core\DevContainers.Core.csproj" />
   </ItemGroup>
 

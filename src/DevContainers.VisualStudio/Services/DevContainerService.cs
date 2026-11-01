@@ -29,6 +29,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
     private const string TroubleshootingUrl = "https://github.com/jcoenen96/vs_devcontainers/blob/main/docs/troubleshooting.md";
 
     private readonly ConcurrentDictionary<string, DevContainerSession> sessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> offeredOnLoad = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim outputGate = new(1, 1);
     private OutputChannel? output;
 
@@ -82,6 +83,11 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
                 : await session.OpenAsync(settings, Report, linked.Token);
 
             log($"Dev container is running: {ShortId(result.ContainerId)}, workspace {result.RemoteWorkspaceFolder}, user {result.RemoteUser ?? "(default)"}.");
+
+            foreach (var problem in ReadCustomizations(configFile).Problems)
+            {
+                log($"Warning: customizations.visualstudio in {configFile.ConfigPath}: {problem} See docs/customizations.md.");
+            }
 
             // The editor loads the projects with the SDK on Windows, the container builds them with its own.
             Report("Comparing the SDKs on this computer and in the container");
@@ -428,9 +434,11 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
             package = packages[chosenFolder];
         }
 
+        var customizations = ReadCustomizations(configFile);
+        var inspectPort = customizations.InspectPort ?? NpmPackages.InspectPort;
         var scripts = package.OrderedScripts();
-        var script = scripts[0];
-        if (scripts.Count > 1)
+        var script = customizations.NpmScript is { } preferred && scripts.Contains(preferred) ? preferred : scripts[0];
+        if (scripts.Count > 1 && script != customizations.NpmScript)
         {
             var choices = new ChoiceResultCollection<int>();
             for (var i = 0; i < scripts.Count; i++)
@@ -475,7 +483,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
                 "-Config", configFile.ConfigPath,
                 "-Project", package.Folder,
                 "-Npm", script,
-                .. (debug ? new[] { "-InspectPort", NpmPackages.InspectPort.ToString(System.Globalization.CultureInfo.InvariantCulture) } : []),
+                .. (debug ? new[] { "-InspectPort", inspectPort.ToString(System.Globalization.CultureInfo.InvariantCulture) } : []),
             ];
             foreach (var argument in arguments)
             {
@@ -488,7 +496,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
                 startInfo.Environment["DEVCONTAINERS_RUNTIME"] = settings.Runtime.ToString().ToLowerInvariant();
             }
 
-            log($"Running npm script '{script}' of {package.DisplayName(configFile.WorkspaceFolder)} in the dev container" + (debug ? $", with the Node.js inspector on port {NpmPackages.InspectPort}" : string.Empty));
+            log($"Running npm script '{script}' of {package.DisplayName(configFile.WorkspaceFolder)} in the dev container" + (debug ? $", with the Node.js inspector on port {inspectPort}" : string.Empty));
             Process.Start(startInfo)?.Dispose();
             if (!debug)
             {
@@ -497,7 +505,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
 
             // Attaching waits for the app to start (a build first, often), so it runs in the background: the command
             // returns, and the other commands (Stop Container, ...) work meanwhile.
-            var target = $"localhost:{NpmPackages.InspectPort}";
+            var target = $"localhost:{inspectPort}";
             var attachTo = solution ?? configFile.WorkspaceFolder; // With a folder opened, Visual Studio reports the folder as its solution.
             _ = Task.Run(() => this.AttachJavaScriptDebuggerAsync(attachTo, target, log), CancellationToken.None);
         }
@@ -527,6 +535,60 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         catch (Exception ex)
         {
             log($"Could not attach the JavaScript debugger to {target}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// With <c>"openOnLoad": "prompt"</c> or <c>"always"</c> in customizations.visualstudio, offers to open (or opens)
+    /// the dev container of a solution that was just loaded and whose container does not run. Once per configuration
+    /// and Visual Studio session.
+    /// </summary>
+    internal void OfferToOpenOnLoad(DevContainerConfigFile configFile, VisualStudioCustomizations customizations)
+    {
+        if (customizations.OpenOnLoad == OpenOnLoad.Never || !this.offeredOnLoad.Add(configFile.ConfigPath))
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (customizations.OpenOnLoad == OpenOnLoad.Prompt)
+                {
+                    var choices = new ChoiceResultCollection<bool>
+                    {
+                        { "Open in Container", true },
+                        { "Not now", false },
+                    };
+                    var open = await extensibility.Shell().ShowPromptAsync(
+                        $"This folder has a dev container ({DescribeConfig(configFile)}). Open it, so the app builds and runs inside it?",
+                        new PromptOptions<bool>(choices, defaultChoiceIndex: 0, dismissedReturns: false) { Title = "Dev Containers" },
+                        CancellationToken.None);
+                    if (!open)
+                    {
+                        return;
+                    }
+                }
+
+                await this.OpenAsync(rebuild: false, noCache: false, CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                (await this.GetLogAsync(CancellationToken.None))($"Opening the dev container when the solution loaded failed: {ex.Message}");
+            }
+        });
+    }
+
+    private static VisualStudioCustomizations ReadCustomizations(DevContainerConfigFile configFile)
+    {
+        try
+        {
+            return DevContainerConfig.Load(configFile.ConfigPath).VisualStudio;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            return VisualStudioCustomizations.Empty;
         }
     }
 
@@ -600,6 +662,14 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
                 PromptOptions.OK,
                 cancellationToken);
             return null;
+        }
+
+        // customizations.visualstudio.startupProject names the project to use without asking.
+        var customizations = ReadCustomizations(configFile);
+        var startup = candidates.Where(c => customizations.IsStartupProject(c.Path, configFile.WorkspaceFolder)).ToList();
+        if (startup.Count == 1)
+        {
+            return startup[0];
         }
 
         if (preferLaunchProfile && candidates.Count > 1)
