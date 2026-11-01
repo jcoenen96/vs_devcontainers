@@ -53,6 +53,45 @@ public sealed record LaunchProfileSettings(string Name, string? ApplicationUrl, 
     }
 
     /// <summary>
+    /// The URLs to listen on inside the container: <c>localhost</c>, <c>127.0.0.1</c> and <c>[::1]</c> become
+    /// <c>0.0.0.0</c>, because a port forwarded from Windows arrives on the container's network interface, not on its
+    /// loopback. The launcher script (ConvertTo-ContainerUrls) does the same.
+    /// </summary>
+    public static string ToContainerUrls(string urls) =>
+        string.Join(';', urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(url => LoopbackUrl.Replace(url, "${scheme}0.0.0.0")));
+
+    /// <summary>
+    /// The ports of the launch profile that the project's "Dev Container" profile runs, which the extension forwards
+    /// with the ports of <c>forwardPorts</c>. Empty when the project has no such profile.
+    /// </summary>
+    public static IReadOnlyList<int> ContainerPorts(string projectFolder)
+    {
+        try
+        {
+            if (Read(projectFolder, Launch.DevContainerLaunchProfile.ProfileName) is null || InnerProfileName(projectFolder) is not { } inner)
+            {
+                return [];
+            }
+
+            return (Read(projectFolder, inner)?.ApplicationUrl ?? string.Empty)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(url => Uri.TryCreate(url.Replace("*", "0.0.0.0", StringComparison.Ordinal).Replace("+", "0.0.0.0", StringComparison.Ordinal), UriKind.Absolute, out var uri) && !uri.IsDefaultPort ? uri.Port : 0)
+                .Where(port => port > 0)
+                .Distinct()
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // Being edited: its ports come back once it parses again.
+            return [];
+        }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex LoopbackUrl =
+        new(@"^(?<scheme>[A-Za-z]+://)(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
     /// The inner profile the "Dev Container" profile runs (its <c>-LaunchProfile "name"</c>), if it names one.
     /// </summary>
     public static string? InnerProfileName(string projectFolder)
@@ -81,7 +120,13 @@ public sealed class ContainerDebugger(IProcessRunner runner, ContainerRuntime ru
     public const string CoreClrEngineGuid = "541B8A8A-6081-4506-9F0A-1CE771DEBC04";
 
     /// <summary>Same artifacts output as the Run button's launcher, so both reuse one build.</summary>
-    private const string ArtifactsArguments = "--property:UseArtifactsOutput=true --property:ArtifactsPath=$HOME/.vs-devcontainer/build";
+    public const string ArtifactsArguments = "--property:UseArtifactsOutput=true --property:ArtifactsPath=$HOME/.vs-devcontainer/build";
+
+    /// <summary>
+    /// Takes the build lock that the launcher script takes too: projects built at the same time share the build
+    /// output, so they build one at a time. Without <c>flock</c> in the container, builds just do not wait.
+    /// </summary>
+    public const string BuildLock = "exec 9>/tmp/vs-run-build.lock; flock 9 2>/dev/null; ";
 
     private string User => container.RemoteUser ?? "root";
 
@@ -118,7 +163,7 @@ public sealed class ContainerDebugger(IProcessRunner runner, ContainerRuntime ru
     public async Task<DebugTarget> BuildAsync(string remoteProjectFolder, LaunchProfileSettings? profile, Action<string> log, CancellationToken cancellationToken)
     {
         log($"Building {remoteProjectFolder} in the container");
-        var build = await this.ExecAsync(["sh", "-c", $"dotnet build . -c Debug {ArtifactsArguments}"], remoteProjectFolder, log, cancellationToken, stream: true).ConfigureAwait(false);
+        var build = await this.ExecAsync(["sh", "-c", $"{BuildLock}dotnet build . -c Debug {ArtifactsArguments}"], remoteProjectFolder, log, cancellationToken, stream: true).ConfigureAwait(false);
         if (!build.Succeeded)
         {
             throw new InvalidOperationException("The build in the container failed. The Output window has the build log.");
@@ -134,11 +179,12 @@ public sealed class ContainerDebugger(IProcessRunner runner, ContainerRuntime ru
         var program = values.GetProperty("TargetPath").GetString()!;
         var workingDirectory = values.GetProperty("RunWorkingDirectory").GetString() is { Length: > 0 } wd ? wd : remoteProjectFolder;
 
-        // dotnet run applies the profile like this: its variables, and applicationUrl as ASPNETCORE_URLS.
+        // dotnet run applies the profile like this: its variables, and applicationUrl as ASPNETCORE_URLS (listening on
+        // every interface of the container, as the launcher does).
         var environment = new Dictionary<string, string>(profile?.EnvironmentVariables ?? new Dictionary<string, string>(), StringComparer.Ordinal);
         if (profile?.ApplicationUrl is { Length: > 0 } urls)
         {
-            environment["ASPNETCORE_URLS"] = urls;
+            environment["ASPNETCORE_URLS"] = LaunchProfileSettings.ToContainerUrls(urls);
         }
 
         var arguments = profile?.CommandLineArgs is { Length: > 0 } args ? args.Split(' ', StringSplitOptions.RemoveEmptyEntries) : [];

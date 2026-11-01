@@ -14,6 +14,11 @@ itself.
 - `"db:5432"` forwards `localhost:5432` to port 5432 of the host `db` as the dev container reaches it, such as
   another service of a Docker Compose setup.
 
+The ports of a project's launch profile are forwarded too, without listing them: for every project of the
+solution with a **Dev Container** profile, the ports in the `applicationUrl` of the profile it runs
+(`-LaunchProfile`). The Blazor template's `http://localhost:5049` is then reachable as `http://localhost:5049` on
+Windows while the app runs in the container.
+
 ## When ports are forwarded
 
 The extension loads with every solution and checks every 5 seconds whether the solution's dev container runs. It
@@ -50,6 +55,9 @@ A port already in use on Windows is skipped, and the Output window says why. Usu
 - **`appPort`** published the port when the container was created. `appPort` still works, but it is fixed at
   creation; prefer `forwardPorts`.
 - **Another program** uses the port. Stop it, or change the port the app listens on.
+- **The same project runs on Windows** with one of its own profiles. While its container runs, its profile's
+  ports are taken by the forwarding, and the app on Windows cannot listen on them. Stop the container, or pick a
+  profile with other ports to run on Windows.
 
 The extension uses the same port number on Windows as in the container; it does not pick another free port.
 

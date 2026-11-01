@@ -58,6 +58,7 @@ Open a solution whose folder (or a parent folder up to the repository root) has 
 | --- | --- |
 | Open in Container | Starts the folder's container, reusing the one VS Code uses if there is one, and builds it only when there is none. Asks which config to use when there are several. |
 | Start Debugging in Container | Builds a .NET project in the container and starts it under Visual Studio's debugger, which runs in the container too. See [docs/debugging.md](docs/debugging.md). |
+| Run Tests in Container | Runs `dotnet test` for the solution inside the container, with the output in the Output window. |
 | Open Container Terminal | Opens a shell inside the running container, with the container's `remoteEnv` and user. |
 | Add Run Profile for Dev Container | Adds a **Dev Container** launch profile to a project, so the Run button builds and runs it inside the container. See [docs/run-in-dev-container.md](docs/run-in-dev-container.md). |
 | Rebuild Container | Removes the container and creates it again from the current config. Asks first when VS Code has it open. |

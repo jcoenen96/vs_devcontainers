@@ -6,8 +6,8 @@ using DevContainers.Core.Runtime;
 namespace DevContainers.VisualStudio.Services;
 
 /// <summary>
-/// Forwards the <c>forwardPorts</c> of the open solution's dev container to <c>localhost</c> while that container
-/// runs, whoever started it: Open in Container, the Run button's launcher, or VS Code. Checks every few seconds,
+/// Forwards the <c>forwardPorts</c> of the open solution's dev container, and the ports of the launch profiles its
+/// "Dev Container" profiles run, to <c>localhost</c> while that container runs, whoever started it: Open in Container, the Run button's launcher, or VS Code. Checks every few seconds,
 /// and stops forwarding when the container stops or another solution is opened.
 /// </summary>
 internal sealed class PortForwardingService(DevContainerService devContainers) : IDisposable
@@ -59,7 +59,12 @@ internal sealed class PortForwardingService(DevContainerService devContainers) :
         try
         {
             var configFile = await devContainers.FindCurrentConfigAsync(cancellationToken);
-            var ports = configFile is null ? [] : ReadPorts(configFile);
+            var ports = configFile is null
+                ? []
+                : ReadPorts(configFile)
+                    .Concat((await devContainers.GetLaunchProfilePortsAsync(configFile, cancellationToken)).Select(port => new PortSpec("localhost", port)))
+                    .Distinct()
+                    .ToList();
             if (configFile is null || ports.Count == 0)
             {
                 this.Stop();

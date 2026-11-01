@@ -5,6 +5,7 @@ using DevContainers.Core.Configuration;
 using DevContainers.Core.Debugging;
 using DevContainers.Core.Launch;
 using DevContainers.Core.Runtime;
+using DevContainers.Core.Testing;
 using DevContainers.VisualStudio.Settings;
 using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Documents;
@@ -269,6 +270,91 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         }
     }
 
+    /// <summary>Runs the solution's tests (dotnet test) inside the dev container, with the output in the Output window.</summary>
+    public async Task RunTestsAsync(CancellationToken cancellationToken)
+    {
+        var configFile = await this.ResolveConfigAsync(cancellationToken);
+        var solution = (await extensibility.Workspaces().QuerySolutionAsync(s => s.With(x => x.Path), cancellationToken)).FirstOrDefault()?.Path;
+        if (configFile is null || solution is null)
+        {
+            return;
+        }
+
+        var log = await this.GetLogAsync(cancellationToken);
+        if (!IsInside(solution, configFile.WorkspaceFolder))
+        {
+            await extensibility.Shell().ShowPromptAsync(
+                $"The solution {Path.GetFileName(solution)} is not inside {configFile.WorkspaceFolder}, the folder the dev container mounts, so its tests cannot run there.",
+                PromptOptions.OK,
+                cancellationToken);
+            return;
+        }
+
+        var session = this.sessions.GetOrAdd(configFile.ConfigPath, _ => new DevContainerSession(configFile));
+        this.Current = session;
+        var settings = await this.ReadSettingsAsync(cancellationToken);
+        if (!await prerequisites.EnsureAsync(settings.CliPath, log, cancellationToken))
+        {
+            return;
+        }
+
+        using var progress = await extensibility.Shell().StartProgressReportingAsync(
+            $"Running the tests of {Path.GetFileName(solution)} in the dev container",
+            new ProgressReporterOptions(isWorkCancellable: true),
+            cancellationToken);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, progress.CancellationToken);
+
+        void Report(string line)
+        {
+            log(line);
+            progress.Report(new ProgressStatus(percentComplete: null, Truncate(line, 120)));
+        }
+
+        try
+        {
+            var up = await session.OpenAsync(settings, Report, linked.Token);
+            var folder = Path.GetDirectoryName(solution)!;
+            log($"Running dotnet test {Path.GetFileName(solution)} in the dev container");
+            var passed = await ContainerTestRun.RunAsync(
+                new Core.Processes.ProcessRunner(),
+                session.Runtime!,
+                up,
+                ContainerDebugger.ToContainerPath(configFile.WorkspaceFolder, up.RemoteWorkspaceFolder, folder),
+                Path.GetFileName(solution),
+                log,
+                linked.Token);
+            await extensibility.Shell().ShowPromptAsync(
+                passed
+                    ? "All tests passed in the dev container."
+                    : "Tests failed or could not run in the dev container. The Dev Containers pane of the Output window has the details.",
+                PromptOptions.OK,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            log("Cancelled.");
+        }
+        catch (Exception ex)
+        {
+            await this.ReportFailureAsync("The tests could not run in the dev container.", session.LastError ?? ex.Message, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The ports of the launch profiles that the solution's "Dev Container" profiles run, which are forwarded with
+    /// <c>forwardPorts</c>.
+    /// </summary>
+    internal async Task<IReadOnlyList<int>> GetLaunchProfilePortsAsync(DevContainerConfigFile configFile, CancellationToken cancellationToken)
+    {
+        var projects = await extensibility.Workspaces().QueryProjectsAsync(project => project.With(p => p.Path), cancellationToken);
+        return projects
+            .Select(p => p.Path)
+            .Where(path => path is not null && IsProjectFile(path) && IsInside(path, configFile.WorkspaceFolder))
+            .SelectMany(path => LaunchProfileSettings.ContainerPorts(Path.GetDirectoryName(path)!))
+            .Distinct()
+            .ToList();
+    }
+
     public void Dispose()
     {
         this.output?.Dispose();
@@ -323,14 +409,11 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
     /// </summary>
     private async Task<(string Name, string Path)?> ChooseProjectAsync(DevContainerConfigFile configFile, string question, bool preferLaunchProfile, CancellationToken cancellationToken)
     {
-        var workspace = Path.GetFullPath(configFile.WorkspaceFolder) + Path.DirectorySeparatorChar;
         var projects = await extensibility.Workspaces().QueryProjectsAsync(
             project => project.With(p => p.Name).With(p => p.Path),
             cancellationToken);
         var candidates = projects
-            .Where(p => p.Path is { } path
-                && path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
-                && Path.GetFullPath(path).StartsWith(workspace, StringComparison.OrdinalIgnoreCase))
+            .Where(p => p.Path is { } path && IsProjectFile(path) && IsInside(path, configFile.WorkspaceFolder))
             .Select(p => (Name: p.Name ?? Path.GetFileNameWithoutExtension(p.Path!), Path: p.Path!))
             .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -338,7 +421,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         if (candidates.Count == 0)
         {
             await extensibility.Shell().ShowPromptAsync(
-                $"No C# project of this solution is inside {configFile.WorkspaceFolder}, the folder the dev container mounts.",
+                $"No .NET project (C#, F# or Visual Basic) of this solution is inside {configFile.WorkspaceFolder}, the folder the dev container mounts.",
                 PromptOptions.OK,
                 cancellationToken);
             return null;
@@ -485,6 +568,12 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
             return file.DisplayName;
         }
     }
+
+    private static bool IsProjectFile(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is ".csproj" or ".fsproj" or ".vbproj";
+
+    private static bool IsInside(string path, string folder) =>
+        Path.GetFullPath(path).StartsWith(Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private static string ShortId(string id) => id.Length > 12 ? id[..12] : id;
 
