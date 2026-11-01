@@ -36,6 +36,8 @@ The first public preview.
 - **Hot Reload:** the Dev Container profile can run the app with `dotnet watch`, polling for changes saved on Windows.
 - **Status window:** **Show Dev Container Status** shows the container's state, engine and forwarded ports, with
   buttons for the common commands.
+- **Performance guide** ([docs/performance.md](docs/performance.md)): what crosses the Windows mount, what the
+  extension keeps in the container, and repositories inside WSL.
 - Every .NET project type `dotnet run` starts: Web API, Blazor, worker, console, and C#, F# and Visual Basic.
 
 ### Known limitations

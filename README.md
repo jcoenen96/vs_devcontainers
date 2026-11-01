@@ -78,7 +78,8 @@ what to do next and offers to fix it when it can (start the engine, open or rebu
 which IntelliSense uses, and the one in the container can both handle the projects; see
 [docs/intellisense.md](docs/intellisense.md). Per-repository settings (the startup project, Hot Reload, offering
 to open the container when the solution loads) go in `customizations.visualstudio`; see
-[docs/customizations.md](docs/customizations.md).
+[docs/customizations.md](docs/customizations.md). Builds feel slow? [docs/performance.md](docs/performance.md)
+explains where the time goes and what helps, including keeping the repository inside WSL.
 
 Settings are under **Tools > Options > Dev Containers**: container engine (Automatic, Docker or Podman), and
 paths to the engine and the CLI when they are not on PATH. Automatic uses Docker when it is running and falls
