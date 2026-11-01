@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work as described in the docs.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! For a security problem, do not open an issue: see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The command you used, and a devcontainer.json that shows the problem if you can share one.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Output log
+      description: View > Output, pick "Dev Containers" in the list, and paste its content. Remove secrets first.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Extension (Extensions > Manage Extensions), Visual Studio (Help > About), and the engine (docker version or podman version).
+      placeholder: Extension 0.9.0, Visual Studio 18.0.1, Podman 5.6
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Container engine
+      options: [Docker Desktop, Podman Desktop or Podman machine, Other]
+    validations:
+      required: true

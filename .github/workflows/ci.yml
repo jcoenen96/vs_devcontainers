@@ -121,6 +121,12 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - uses: microsoft/setup-msbuild@v2
+      - name: The version has a changelog section
+        shell: pwsh
+        run: |
+          $version = ([xml] (Get-Content -Raw Directory.Build.props)).Project.PropertyGroup.VersionPrefix | Where-Object { $_ } | Select-Object -First 1
+          if (-not (& ./build/Get-ChangelogSection.ps1 -Version $version)) { throw "CHANGELOG.md has no section '## [$version]' for VersionPrefix $version." }
+          "Version $version"
       - name: Build
         run: msbuild VsDevContainers.slnx /restore /p:Configuration=Release /v:minimal
       - name: Unit tests

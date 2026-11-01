@@ -8,8 +8,11 @@ It targets **.NET and TypeScript** applications. C++ is out of scope: Visual Stu
 containers natively.
 
 > [!WARNING]
-> **Under development.** This project is an early prototype and not ready for production use. Features are
-> incomplete, behaviour may change between versions, and things may break. Step 1 of the plan (below) is in place.
+> **Preview.** Versions before 1.0 are previews: behaviour may change between versions, and some parts are not yet
+> verified on every setup (see the [changelog](CHANGELOG.md) for known limitations). Report problems in the
+> [issues](https://github.com/jcoenen96/vs_devcontainers/issues).
+
+**New here?** Start with [docs/getting-started.md](docs/getting-started.md).
 
 > [!NOTE]
 > **Vibe coded.** This project is currently written entirely with an AI coding assistant. The code has
@@ -35,7 +38,7 @@ src/DevContainers.Core           Config discovery, Docker/Podman detection, devc
 src/DevContainers.VisualStudio   The extension (VisualStudio.Extensibility, out of process)
 tests/DevContainers.Core.Tests   Unit tests, plus a real-container integration test
 tests/DevContainers.VisualStudio.UITests   Drives a real Visual Studio end to end (docs/end-to-end-tests.md)
-docs/                            How the extension works
+docs/                            How the extension works; start with docs/getting-started.md
 samples/dotnet-console           A small solution with a .devcontainer to try it on
 samples/dotnet-webapi            A Web API with a .devcontainer, to test reaching the app in the container from the host
 samples/typescript-node          A TypeScript server with a .devcontainer, for the npm script commands
@@ -149,11 +152,17 @@ The integration test needs Docker or Podman and the devcontainer CLI. Set `DEVCO
 it against Podman. On Windows PowerShell, set the variables with `$env:DEVCONTAINERS_INTEGRATION = "1"` first.
 CI runs the tests against both Docker and Podman and builds the VSIX on every pull request.
 
+## Releases and security
+
+Versions, the changelog and how a release is made: [CHANGELOG.md](CHANGELOG.md) and
+[docs/releasing.md](docs/releasing.md). Report security problems privately, as [SECURITY.md](SECURITY.md) explains;
+it also lists what the extension copies into containers.
+
 ## Plan
 
 1. **Foundation** (done): extension skeleton, devcontainer CLI engine, Docker and Podman, open, rebuild, stop,
    terminal, output log.
-2. **.NET inner loop:** the Run button builds and runs the project inside the container through a launch profile
+2. **.NET inner loop** (done): the Run button builds and runs the project inside the container through a launch profile
    (done), and Visual Studio's debugger debugs it there (done).
 3. **TypeScript inner loop** (done): run TypeScript and Node.js apps (their npm scripts) inside the container,
    attach Visual Studio's JavaScript debugger to them, and forward the ports they open.
