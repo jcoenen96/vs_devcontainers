@@ -54,8 +54,9 @@ public sealed record LaunchProfileSettings(string Name, string? ApplicationUrl, 
 
     /// <summary>
     /// The URLs to listen on inside the container: <c>localhost</c>, <c>127.0.0.1</c> and <c>[::1]</c> become
-    /// <c>0.0.0.0</c>, because a port forwarded from Windows arrives on the container's network interface, not on its
-    /// loopback. The launcher script (ConvertTo-ContainerUrls) does the same.
+    /// <c>0.0.0.0</c>, so <c>appPort</c>, other Compose services and the container's address reach the app too, not
+    /// only the extension's port forwarding (which connects inside the container). The launcher script
+    /// (ConvertTo-ContainerUrls) does the same.
     /// </summary>
     public static string ToContainerUrls(string urls) =>
         string.Join(';', urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
