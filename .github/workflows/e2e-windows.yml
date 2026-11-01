@@ -125,7 +125,9 @@ jobs:
           $deadline = (Get-Date).AddMinutes(8)
           while (-not $info -and -not $p.HasExited -and (Get-Date) -lt $deadline) {
             Start-Sleep 5
-            try { $info = (Invoke-WebRequest http://localhost:5080/api/info -UseBasicParsing -TimeoutSec 5).Content } catch { }
+            # Visual Studio is not running yet, so nothing forwards the port: ask from inside the container.
+            $id = podman ps -q --filter label=devcontainer.local_folder | Select-Object -First 1
+            if ($id) { $info = podman exec $id curl -sf http://localhost:5080/api/info 2>$null }
           }
           '--- launcher output'; Get-Content $out
           '--- launcher errors'; Get-Content $err

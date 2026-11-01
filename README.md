@@ -27,7 +27,8 @@ variable substitution without reimplementing them, and containers stay compatibl
 for the same folder. Visual Studio and VS Code share that one container: Visual Studio reuses the container VS Code
 created (and the other way round), and stopping the app never stops the container.
 [docs/devcontainer-cli-integration.md](docs/devcontainer-cli-integration.md) explains how the
-extension drives the CLI.
+extension drives the CLI. Ports in `forwardPorts` are forwarded to `localhost` while the container runs
+([docs/port-forwarding.md](docs/port-forwarding.md)).
 
 ```
 src/DevContainers.Core           Config discovery, Docker/Podman detection, devcontainer CLI wrapper (net10.0, no VS dependency)
@@ -147,5 +148,5 @@ CI runs the tests against both Docker and Podman and builds the VSIX on every pu
    (done). Next: attach the debugger to the app in the container.
 3. **TypeScript inner loop:** run TypeScript and Node.js apps (their npm scripts) inside the container from the Run
    button, and attach Visual Studio's JavaScript debugger to them.
-4. **Parity and Marketplace:** port forwarding, a `customizations.visualstudio` section, Marketplace packaging.
+4. **Parity and Marketplace:** a `customizations.visualstudio` section, Marketplace packaging.
    The CLI stays a separate install; the extension never bundles it.

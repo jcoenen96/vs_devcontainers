@@ -260,6 +260,25 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
             cancellationToken);
     }
 
+    /// <summary>
+    /// The dev container configuration the open solution uses, without asking: the one last opened, else the first
+    /// found for the solution folder. Null when no solution is open or it has none.
+    /// </summary>
+    internal async Task<DevContainerConfigFile?> FindCurrentConfigAsync(CancellationToken cancellationToken)
+    {
+        var folder = await this.GetSolutionFolderAsync(cancellationToken);
+        if (folder is null)
+        {
+            return null;
+        }
+
+        var found = DevContainerConfigLocator.FindFromFolder(folder);
+        var current = this.Current?.ConfigFile;
+        return current is not null && found.Any(f => string.Equals(f.ConfigPath, current.ConfigPath, StringComparison.OrdinalIgnoreCase))
+            ? current
+            : found.FirstOrDefault();
+    }
+
     private async Task<DevContainerConfigFile?> ResolveConfigAsync(CancellationToken cancellationToken)
     {
         var startFolder = await this.GetSolutionFolderAsync(cancellationToken)
@@ -308,7 +327,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         return string.IsNullOrEmpty(directory) ? null : directory;
     }
 
-    private async Task<DevContainerSettings> ReadSettingsAsync(CancellationToken cancellationToken)
+    internal async Task<DevContainerSettings> ReadSettingsAsync(CancellationToken cancellationToken)
     {
         var settingsApi = extensibility.Settings();
         var runtime = await settingsApi.ReadEffectiveValueAsync(DevContainerSettingDefinitions.Runtime, cancellationToken);
@@ -328,7 +347,7 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
         };
     }
 
-    private async Task<Action<string>> GetLogAsync(CancellationToken cancellationToken)
+    internal async Task<Action<string>> GetLogAsync(CancellationToken cancellationToken)
     {
         await this.outputGate.WaitAsync(cancellationToken);
         try

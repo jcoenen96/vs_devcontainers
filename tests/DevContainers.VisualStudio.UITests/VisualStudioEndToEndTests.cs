@@ -57,7 +57,8 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             var container = Assert.Single(await engine.FindDevContainersAsync(configFile.WorkspaceFolder, configFile.ConfigPath, default));
             Assert.True(container.IsRunning, $"Container {container.Id} is {container.State}.");
 
-            // 3. Debug > Start Without Debugging runs the app inside the container; the host reaches it on port 5080.
+            // 3. Debug > Start Without Debugging runs the app inside the container; the host reaches it on port 5080,
+            // which the extension forwards (forwardPorts) while the container runs.
             // Nothing answers before that, so the answer below comes from this run.
             Assert.False(await IsApiAnsweringAsync(), "Something already answers on port 5080 before the run.");
             var runStarted = DateTime.Now;

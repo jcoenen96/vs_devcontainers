@@ -18,11 +18,10 @@ Two things have to be right, and the sample sets both:
    `ASPNETCORE_URLS=http://0.0.0.0:5080` in `containerEnv` covers launches without a profile, and the `http`
    profile in `Properties/launchSettings.json` uses the same URL, because a launch profile's `applicationUrl`
    overrides `ASPNETCORE_URLS`.
-2. **The port is published to the host.** `appPort: [5080]` makes Docker or Podman publish the port when the
-   container is created (`-p 5080:5080`), so it works now, while the extension does not forward ports yet.
-   `forwardPorts: [5080]` is there too: VS Code forwards it, and the extension will once port forwarding is in
-   place (step 4 of the plan). In VS Code, port 5080 on the host is already taken by `appPort`, so VS Code forwards
-   to the next free port; use the address it shows in the Ports view.
+2. **The port is forwarded to the host.** `forwardPorts: [5080]` makes the extension forward `localhost:5080` on
+   Windows to port 5080 in the container while the container runs, as VS Code does. The Output window's **Dev
+   Containers** pane says `Forwarding port 5080` once it does. Visual Studio and VS Code can both have the
+   container open: whichever forwards first gets port 5080, and the other one leaves it.
 
 ## Test it
 
@@ -52,10 +51,11 @@ Containers > Open Container Terminal**, then `dotnet run --project HelloApi --la
 
 - **Check from inside the container first.** In the container terminal, `curl http://localhost:5080/api/info`.
   If that fails, the API is not running or listens on another port; the startup log says which.
-- **Check the port is published.** On the host, `docker port <container>` (or `podman port <container>`) should
-  list `5080/tcp -> 0.0.0.0:5080`. If it lists nothing, the container was created before `appPort` was set:
-  rebuild it.
+- **Check the port is forwarded.** The **Dev Containers** pane of the Output window says `Forwarding port 5080`.
+  If it says the port is in use, another program has port 5080 on Windows; VS Code's Ports view shows whether it
+  is VS Code.
 - **Listening on localhost only.** If the startup log says `http://localhost:5080`, a launch profile or setting
   overrode the URL. Use the `http` profile, or set `ASPNETCORE_URLS` back to `http://0.0.0.0:5080`.
-- **Port 5080 is in use on the host.** Change `appPort` to `["5081:5080"]`, rebuild the container and browse to
-  port 5081.
+- **Without Visual Studio.** Only the extension and VS Code forward ports. To reach the app with just the
+  devcontainer CLI, add `"appPort": [5080]`, which publishes the port when the container is created, and rebuild
+  the container.
