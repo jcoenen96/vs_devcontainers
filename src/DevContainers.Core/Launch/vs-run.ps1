@@ -44,6 +44,11 @@ param(
 # Native tools report failure through exit codes, which are checked below. 'Stop' would turn their stderr output
 # into errors on Windows PowerShell 5.1.
 $ErrorActionPreference = 'Continue'
+if ($PSVersionTable.PSEdition -eq 'Desktop' -and $env:PSModulePath) {
+    # Started from PowerShell 7 (Visual Studio opened from a pwsh prompt, for example), Windows PowerShell inherits
+    # PowerShell 7's module folders, and their modules fail to load here. Keep the Windows PowerShell ones.
+    $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -and $_ -notmatch '\\PowerShell\\(7\\)?Modules' }) -join ';'
+}
 # DEVCONTAINERS_RUN_LOG=<file> keeps a transcript of the run, for diagnosing a window that closed too fast.
 if ($env:DEVCONTAINERS_RUN_LOG) { Start-Transcript -Path $env:DEVCONTAINERS_RUN_LOG -Append | Out-Null }
 $onWindows = $env:OS -eq 'Windows_NT'
@@ -250,9 +255,13 @@ function Get-HostNuGetConfig {
 function Get-HostDevCertificate {
     # The ASP.NET Core HTTPS development certificate Windows trusts ('dotnet dev-certs https --trust'), identified
     # by its marker extension. Only Windows keeps it in a certificate store PowerShell can read.
+    # Read through .NET, not the Cert: drive: that needs a PowerShell module, which fails to load in Windows
+    # PowerShell when it inherited PowerShell 7's module path.
     if (-not $onWindows) { return $null }
     $now = Get-Date
-    return Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'CurrentUser')
+    try { $store.Open('ReadOnly') } catch { return $null }
+    return $store.Certificates |
         Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt $now -and ($_.Extensions | Where-Object { $_.Oid.Value -eq '1.3.6.1.4.1.311.84.1.1' }) } |
         Sort-Object NotAfter -Descending |
         Select-Object -First 1

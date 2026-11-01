@@ -31,7 +31,9 @@ jobs:
           if (-not $vs) { throw 'Visual Studio 2026 is not installed on this runner.' }
           wsl --version
           wsl --status
-          docker version --format '{{.Server.Version}} {{.Server.Os}}'
+          # Only for the log: some runners have no Docker service running, and the test uses Podman anyway.
+          docker version --format '{{.Server.Version}} {{.Server.Os}}' 2>&1 | Out-Host
+          exit 0
 
       - uses: actions/setup-dotnet@v4
         with:
