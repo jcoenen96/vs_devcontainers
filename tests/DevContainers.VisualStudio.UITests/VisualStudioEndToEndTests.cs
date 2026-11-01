@@ -198,17 +198,32 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
             // attach through automation is known to work on the runner's Visual Studio (docs/end-to-end-tests.md).
             await Task.Delay(TimeSpan.FromSeconds(20));
             vs.Screenshot("ts-03-debugging");
+            // No fallback prompt does not mean it attached: the extension may still be trying. Debug > Stop
+            // Debugging exists only while a debug session runs.
             var fallback = vs.TryReadPrompt("could not attach by itself");
-            this.Log(fallback is null
-                ? "The JavaScript debugger attached (no fallback prompt)."
-                : "::warning title=JavaScript debugger::The debugger did not attach by itself: " + fallback);
             if (fallback is not null)
             {
+                this.Log("::warning title=JavaScript debugger::The debugger did not attach by itself: " + fallback);
                 vs.ClosePrompt();
             }
             else
             {
-                vs.ClickMenu("Debug", "Stop Debugging");
+                try
+                {
+                    vs.ClickMenu("Debug", "Stop Debugging");
+                    this.Log("The JavaScript debugger attached.");
+                }
+                catch (InvalidOperationException ex)
+                {
+                    this.Log("::warning title=JavaScript debugger::No debug session after the attach (no Stop Debugging): " + ex.InnerException?.Message);
+                }
+
+                // A fallback prompt that came meanwhile would block the next menus.
+                if (vs.TryReadPrompt("could not attach by itself") is { } late)
+                {
+                    this.Log("::warning title=JavaScript debugger::The debugger did not attach by itself: " + late);
+                    vs.ClosePrompt();
+                }
             }
 
             // 3. Stop Container.
