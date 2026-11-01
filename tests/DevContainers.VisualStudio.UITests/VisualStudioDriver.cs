@@ -102,6 +102,75 @@ internal sealed class VisualStudioDriver : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Makes a project the startup project, through this Visual Studio's automation object (DTE). With several
+    /// projects and no saved .vs state, Visual Studio does not always pick the same one, and the Run button and the
+    /// launch profile follow the startup project. Retries until the solution has loaded.
+    /// </summary>
+    /// <param name="uniqueName">The project's path relative to the solution, such as <c>HelloApi\HelloApi.csproj</c>.</param>
+    public void SetStartupProject(string uniqueName, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        Exception? last = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var dte = FindDte(this.process.Id);
+                if (dte is not null)
+                {
+                    var solution = Get(dte, "Solution")!;
+                    var build = Get(solution, "SolutionBuild")!;
+                    if ((int)Get(Get(solution, "Projects")!, "Count")! > 0)
+                    {
+                        build.GetType().InvokeMember("StartupProjects", System.Reflection.BindingFlags.SetProperty, null, build, [uniqueName]);
+                        this.log($"Startup project: {uniqueName}");
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or System.Reflection.TargetInvocationException or InvalidCastException)
+            {
+                // Busy or still loading.
+                last = ex;
+            }
+
+            this.DismissKnownDialogs();
+            Thread.Sleep(3000);
+        }
+
+        throw new TimeoutException($"Could not make {uniqueName} the startup project within {timeout}: {last?.InnerException?.Message ?? last?.Message ?? "no Visual Studio automation object"}");
+    }
+
+    private static object? Get(object target, string property) =>
+        target.GetType().InvokeMember(property, System.Reflection.BindingFlags.GetProperty, null, target, null);
+
+    // Visual Studio registers its DTE in the Running Object Table as "!VisualStudio.DTE.<version>:<process id>".
+    private static object? FindDte(int processId)
+    {
+        System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(GetRunningObjectTable(0, out var table));
+        System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(CreateBindCtx(0, out var context));
+        table.EnumRunning(out var monikers);
+        var found = new System.Runtime.InteropServices.ComTypes.IMoniker[1];
+        while (monikers.Next(1, found, IntPtr.Zero) == 0)
+        {
+            found[0].GetDisplayName(context, null, out var name);
+            if (name.StartsWith("!VisualStudio.DTE.", StringComparison.Ordinal) && name.EndsWith(":" + processId, StringComparison.Ordinal))
+            {
+                table.GetObject(found[0], out var dte);
+                return dte;
+            }
+        }
+
+        return null;
+    }
+
+    [System.Runtime.InteropServices.DllImport("ole32.dll")]
+    private static extern int GetRunningObjectTable(int reserved, out System.Runtime.InteropServices.ComTypes.IRunningObjectTable table);
+
+    [System.Runtime.InteropServices.DllImport("ole32.dll")]
+    private static extern int CreateBindCtx(int reserved, out System.Runtime.InteropServices.ComTypes.IBindCtx context);
+
     /// <summary>Opens a menu path from the main menu bar and invokes the last item.</summary>
     public void ClickMenu(params string[] path)
     {
