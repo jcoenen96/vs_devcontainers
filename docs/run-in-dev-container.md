@@ -88,9 +88,9 @@ The app runs inside the container, so two settings decide whether Windows can re
 
 - **The app listens on every interface in the container** (`http://0.0.0.0:5080`), not on `localhost`, which
   inside the container is the container's own loopback. The `http` profile's `applicationUrl` sets it.
-- **The port is published** with `appPort` in devcontainer.json. The devcontainer CLI publishes it on the host's
-  `127.0.0.1` when the container is created, so `http://localhost:5080` on Windows reaches the app. Rebuild the
-  container after changing `appPort`.
+- **The port is forwarded** with `forwardPorts` in devcontainer.json. While the container runs, the extension
+  listens on `localhost` on Windows and relays each connection into the container, so `http://localhost:5080`
+  reaches the app. See [port-forwarding.md](port-forwarding.md).
 
 ## Limits for now
 
@@ -98,7 +98,6 @@ The app runs inside the container, so two settings decide whether Windows can re
   attached to it. Use **Debug > Start Without Debugging** (Ctrl+F5). Debugging inside the container is the next
   part of step 2.
 - **.NET projects only.** The script runs `dotnet run`. TypeScript apps come with step 3 of the plan.
-- **Ports from `forwardPorts` are not forwarded yet**; use `appPort`.
 
 ## Tested
 

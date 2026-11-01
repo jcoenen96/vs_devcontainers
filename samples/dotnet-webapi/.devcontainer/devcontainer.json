@@ -8,12 +8,8 @@
     "ASPNETCORE_URLS": "http://0.0.0.0:5080",
     "ASPNETCORE_ENVIRONMENT": "Development"
   },
-  // appPort is published by Docker or Podman when the container is created (docker run -p 5080:5080), so it works
-  // today without the extension forwarding anything. The port is fixed when the container is created: rebuild the
-  // container after changing it.
-  "appPort": [5080],
-  // forwardPorts is the spec's preferred way, done by the tool while the container runs. The devcontainer CLI does
-  // not forward ports and the extension does not yet either (step 4 of the plan); VS Code does.
+  // Visual Studio (with the extension) and VS Code forward these ports to localhost while the container runs. Unlike
+  // appPort, nothing is published when the container is created, so the list can change without a rebuild.
   "forwardPorts": [5080],
   "portsAttributes": {
     "5080": { "label": "HelloApi" }

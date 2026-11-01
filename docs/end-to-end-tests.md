@@ -11,8 +11,9 @@ with the extension installed from its `.vsix`, against real Linux containers. Th
 2. **Extensions > Dev Containers > Open in Container**, then waits for the "The dev container is running" prompt.
    An error prompt fails the test with its text. Checks with the engine that exactly one dev container runs for the
    folder.
-3. **Debug > Start Without Debugging**, then calls `http://localhost:5080/api/info` from Windows until it answers
-   with `"inContainer":true`, and checks that the app runs in the same container.
+3. **Debug > Start Without Debugging**, then calls `http://localhost:5080/api/info` from Windows, through the
+   extension's port forwarding, until it answers with `"inContainer":true`, and checks that the app runs in the
+   same container.
 4. Closes the launcher's console window, like stopping the app, and checks that the container keeps running.
 5. **Extensions > Dev Containers > Stop Container**, and checks that the container stops.
 

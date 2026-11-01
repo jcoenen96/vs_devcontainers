@@ -25,6 +25,10 @@ internal sealed class DevContainersExtension : Extension
             // Visual Studio 2026 runs out-of-process extensions on .NET 10.
             DotnetTargetVersions = ["net10.0"],
         },
+
+        // Loaded with a solution, not only on the first command, so ports are forwarded while its container runs
+        // however it was started.
+        LoadedWhen = ActivationConstraint.SolutionState(SolutionState.Exists),
     };
 
     protected override void InitializeServices(IServiceCollection serviceCollection)
@@ -32,5 +36,13 @@ internal sealed class DevContainersExtension : Extension
         base.InitializeServices(serviceCollection);
         serviceCollection.AddSingleton<PrerequisiteInstaller>();
         serviceCollection.AddSingleton<DevContainerService>();
+        serviceCollection.AddSingleton<PortForwardingService>();
+    }
+
+    protected override Task OnInitializedAsync(VisualStudioExtensibility extensibility, CancellationToken cancellationToken)
+    {
+        var forwarding = this.ServiceProvider.GetRequiredService<PortForwardingService>();
+        _ = Task.Run(() => forwarding.RunAsync(this.ShutdownToken), CancellationToken.None);
+        return base.OnInitializedAsync(extensibility, cancellationToken);
     }
 }

@@ -51,8 +51,10 @@ jobs:
         working-directory: samples/dotnet-webapi/HelloApi
         run: |
           nohup pwsh -NoProfile -File ../.devcontainer/vs-run.ps1 -LaunchProfile http > "$RUNNER_TEMP/run.log" 2>&1 &
+          # Only Visual Studio and VS Code forward ports, so ask from inside the container.
           for i in $(seq 1 150); do
-            if curl -sf http://localhost:5080/api/info > "$RUNNER_TEMP/info.json"; then break; fi
+            id=$(docker ps -q --filter label=devcontainer.local_folder | head -n 1)
+            if [ -n "$id" ] && docker exec "$id" curl -sf http://localhost:5080/api/info > "$RUNNER_TEMP/info.json"; then break; fi
             sleep 4
           done
           cat "$RUNNER_TEMP/run.log"
