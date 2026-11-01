@@ -503,10 +503,23 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
                 return;
             }
 
+            // Attaching waits for the app to start (a build first, often), so it runs in the background: the command
+            // returns, and the other commands (Stop Container, ...) work meanwhile.
             var target = $"localhost:{inspectPort}";
-            // With a folder opened (File > Open > Folder) instead of a solution, Visual Studio reports the folder as its solution.
-            var attached = await VisualStudioAutomation.AttachToNodeInspectorAsync(solution ?? configFile.WorkspaceFolder, target, TimeSpan.FromMinutes(5), cancellationToken);
-            if (attached)
+            var attachTo = solution ?? configFile.WorkspaceFolder; // With a folder opened, Visual Studio reports the folder as its solution.
+            _ = Task.Run(() => this.AttachJavaScriptDebuggerAsync(attachTo, target, log), CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await this.HandleFailureAsync("The npm script could not start in the dev container.", ex, session, ct => this.RunNpmScriptAsync(debug, ct), cancellationToken);
+        }
+    }
+
+    private async Task AttachJavaScriptDebuggerAsync(string solutionPath, string target, Action<string> log)
+    {
+        try
+        {
+            if (await VisualStudioAutomation.AttachToNodeInspectorAsync(solutionPath, target, TimeSpan.FromMinutes(2), log, CancellationToken.None))
             {
                 log($"Attached the JavaScript debugger to {target}.");
                 return;
@@ -517,11 +530,11 @@ internal sealed class DevContainerService(VisualStudioExtensibility extensibilit
                 $"Use Debug > Attach to Process, pick the connection type 'JavaScript and TypeScript (Chrome DevTools/V8 Inspector)', type {target} as the target and attach to the process listed. " +
                 $"A browser works too: open chrome://inspect or edge://inspect.",
                 PromptOptions.OK,
-                cancellationToken);
+                CancellationToken.None);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
-            await this.HandleFailureAsync("The npm script could not start in the dev container.", ex, session, ct => this.RunNpmScriptAsync(debug, ct), cancellationToken);
+            log($"Could not attach the JavaScript debugger to {target}: {ex.Message}");
         }
     }
 

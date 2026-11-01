@@ -44,9 +44,10 @@ internal static class VisualStudioAutomation
     /// Debug > Attach to Process does with the "JavaScript and TypeScript (Chrome DevTools/V8 Inspector)" connection
     /// type. Returns false when this Visual Studio has no such connection type or nothing answers at the target.
     /// </summary>
-    public static async Task<bool> AttachToNodeInspectorAsync(string solutionPath, string target, TimeSpan timeout, CancellationToken cancellationToken)
+    public static async Task<bool> AttachToNodeInspectorAsync(string solutionPath, string target, TimeSpan timeout, Action<string> log, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
+        string? lastProblem = null;
         while (true)
         {
             try
@@ -69,6 +70,13 @@ internal static class VisualStudioAutomation
 
                 if (transport is null)
                 {
+                    var names = new List<string>();
+                    for (var i = 1; i <= (int)Get(transports, "Count")!; i++)
+                    {
+                        names.Add(Get(Invoke(transports, "Item", i)!, "Name") as string ?? "?");
+                    }
+
+                    log($"Visual Studio has no JavaScript (V8 inspector) debugger connection type. It has: {string.Join(", ", names)}.");
                     return false;
                 }
 
@@ -78,14 +86,18 @@ internal static class VisualStudioAutomation
                     Invoke(Invoke(processes, "Item", 1)!, "Attach");
                     return true;
                 }
+
+                lastProblem = $"no process listed at {target} for '{Get(transport, "Name")}'";
             }
-            catch (Exception ex) when (IsBusy(ex) || ex is COMException or TargetInvocationException)
+            catch (Exception ex) when (IsBusy(ex) || ex is COMException or TargetInvocationException or InvalidOperationException)
             {
                 // Busy, or nothing answers at the target yet: try again until the timeout.
+                lastProblem = (ex.InnerException ?? ex).Message;
             }
 
             if (DateTime.UtcNow > deadline)
             {
+                log($"Could not attach the JavaScript debugger to {target}: {lastProblem}");
                 return false;
             }
 
