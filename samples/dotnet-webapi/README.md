@@ -11,17 +11,19 @@ debugger, is reachable from Windows. It listens on port 5080 (HTTP) and 5443 (HT
 
 ## How it is reachable from the host
 
-Two things have to be right, and the sample sets both:
+The launch profiles use the usual `localhost` URLs, as the project template makes them, and two things make
+them reachable from Windows:
 
-1. **Kestrel listens on every interface in the container.** By default ASP.NET Core listens on `localhost` only,
-   which inside a container is the container's own loopback: a request from the host never arrives.
-   `ASPNETCORE_URLS=http://0.0.0.0:5080` in `containerEnv` covers launches without a profile, and the `http`
-   profile in `Properties/launchSettings.json` uses the same URL, because a launch profile's `applicationUrl`
-   overrides `ASPNETCORE_URLS`.
-2. **The port is forwarded to the host.** `forwardPorts: [5080]` makes the extension forward `localhost:5080` on
-   Windows to port 5080 in the container while the container runs, as VS Code does. The Output window's **Dev
-   Containers** pane says `Forwarding port 5080` once it does. Visual Studio and VS Code can both have the
-   container open: whichever forwards first gets port 5080, and the other one leaves it.
+1. **Kestrel listens on every interface in the container.** The extension runs the profile with `localhost`
+   replaced by `0.0.0.0`, so `https://localhost:5443` listens as `https://0.0.0.0:5443`, and `appPort` or another
+   container can reach it too, not only the extension's port forwarding.
+   `ASPNETCORE_URLS=http://0.0.0.0:5080` in `containerEnv` covers launches without a profile, such as
+   `dotnet run --no-launch-profile` in the container terminal.
+2. **The ports are forwarded to the host.** The extension forwards the ports of the profile that the Dev Container
+   profile runs (5443 and 5080), and `forwardPorts: [5080]`, from `localhost` on Windows into the container while
+   the container runs, as VS Code does. The Output window's **Dev Containers** pane says `Forwarding port 5080`
+   once it does. Visual Studio and VS Code can both have the container open: whichever forwards first gets the
+   port, and the other one leaves it.
 
 ## Test it
 
@@ -53,6 +55,10 @@ Start Debugging in Container**. The first time installs the .NET debugger in the
 <http://localhost:5080/api/info>: the breakpoint is hit, and once you continue, `debuggerAttached` is `true`.
 [docs/debugging.md](../../docs/debugging.md) explains how it works.
 
+`HelloApi.Tests` has two tests that start the API in memory. **Extensions > Dev Containers > Run Tests in
+Container** runs them in the container (`dotnet test HelloApi.slnx`), with the result in the Output window; Test
+Explorer runs them on Windows.
+
 ## When the host cannot reach it
 
 - **Check from inside the container first.** In the container terminal, `curl http://localhost:5080/api/info`.
@@ -60,8 +66,9 @@ Start Debugging in Container**. The first time installs the .NET debugger in the
 - **Check the port is forwarded.** The **Dev Containers** pane of the Output window says `Forwarding port 5080`.
   If it says the port is in use, another program has port 5080 on Windows; VS Code's Ports view shows whether it
   is VS Code.
-- **Listening on localhost only.** If the startup log says `http://localhost:5080`, a launch profile or setting
-  overrode the URL. Use the `http` profile, or set `ASPNETCORE_URLS` back to `http://0.0.0.0:5080`.
+- **Listening on localhost only.** If the startup log says `http://localhost:5080`, the app sets its own URL
+  (for example with `UseUrls` or `Kestrel:Endpoints` in appsettings.json), which the profile cannot change. Use
+  `0.0.0.0` there, or leave the URL to the profile.
 - **Without Visual Studio.** Only the extension and VS Code forward ports. To reach the app with just the
   devcontainer CLI, add `"appPort": [5080]`, which publishes the port when the container is created, and rebuild
   the container.

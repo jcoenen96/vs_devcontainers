@@ -17,5 +17,6 @@
   "DevContainers.Settings.CliPath": "devcontainer CLI path",
   "DevContainers.Settings.CliPath.Description": "Full path to devcontainer.js from @devcontainers/cli. Leave empty to find it on PATH or in the global npm folder.",
   "DevContainers.AddLaunchProfile.DisplayName": "Add Run Profile for Dev Container",
-  "DevContainers.Debug.DisplayName": "Start Debugging in Container"
+  "DevContainers.Debug.DisplayName": "Start Debugging in Container",
+  "DevContainers.RunTests.DisplayName": "Run Tests in Container"
 }

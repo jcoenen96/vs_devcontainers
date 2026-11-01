@@ -37,9 +37,9 @@ For the sample API it looks like this:
 - `commandName: Executable` makes Visual Studio start a program instead of the project itself.
 - `$(ProjectDir)` is expanded by Visual Studio to the project folder, so the paths work wherever the repository
   is cloned.
-- `-LaunchProfile "https"` names a regular profile of the project (`commandName: Project`) that `dotnet run` uses
-  **inside** the container, for its URL and environment variables. The command picks the first such profile;
-  without one, `dotnet run` runs without a profile.
+- `-LaunchProfile "https"` names a regular profile of the project (`commandName: Project`) whose settings apply
+  **inside** the container: its environment variables, its `applicationUrl` and its `commandLineArgs`. The
+  command picks the first such profile; without one, the project runs without a profile.
 - `-Config` is added when the configuration is not `.devcontainer/devcontainer.json`, for example
   `.devcontainer/<name>/devcontainer.json`.
 
@@ -64,9 +64,10 @@ Windows) and PowerShell 7.
 5. **Stop the previous run.** Stopping the app in Visual Studio closes the window on Windows, but the app inside
    the container keeps running and would hold its port. Each run records its process group in
    `/tmp/vs-run-<project>.pid` inside the container; the next run stops that group first.
-6. **Run the project** inside the container with `devcontainer exec`, as the container's user and with its
-   environment: `dotnet run --project <project> --launch-profile <profile>`. The output shows in the window, and
-   the window's exit code is the app's. The build output goes to `~/.vs-devcontainer/build` inside the container
+6. **Build and run the project** inside the container with `devcontainer exec`, as the container's user and with
+   its environment: `dotnet build`, then `dotnet run --no-build` with the launch profile's settings applied the way
+   `dotnet run --launch-profile` applies them, except that `localhost` URLs listen on every interface (below). The
+   output shows in the window, and the window's exit code is the app's. The build output goes to `~/.vs-devcontainer/build` inside the container
    (MSBuild's artifacts output), not to `obj/` and `bin/` in your folder: Windows bind mounts (Podman, and Docker
    through WSL) do not let the container's user set file times there, which fails the build with MSB3374, and the
    host's Visual Studio builds use those folders too.
@@ -116,20 +117,48 @@ the container open.
 
 ## Reaching the app from the host
 
-The app runs inside the container, so two settings decide whether Windows can reach it. The
-[sample API](../samples/dotnet-webapi/README.md) has both:
+The app runs inside the container, and Windows reaches it without changes to the project:
 
-- **The app listens on every interface in the container** (`http://0.0.0.0:5080`), not on `localhost`, which
-  inside the container is the container's own loopback. The `http` profile's `applicationUrl` sets it.
-- **The port is forwarded** with `forwardPorts` in devcontainer.json. While the container runs, the extension
-  listens on `localhost` on Windows and relays each connection into the container, so `http://localhost:5080`
-  reaches the app. See [port-forwarding.md](port-forwarding.md).
+- **`localhost` URLs listen on every interface in the container.** The extension's port forwarding reaches an
+  app that listens on the container's `localhost` too, but `appPort`, other services of a Docker Compose setup
+  and tools that connect to the container's address do not. So the launcher (and **Start Debugging in
+  Container**) turns `localhost`, `127.0.0.1` and `[::1]` in the profile's `applicationUrl` into `0.0.0.0`:
+  `https://localhost:7183;http://localhost:5049` from the project template listens as
+  `https://0.0.0.0:7183;http://0.0.0.0:5049`. Other URLs are kept as they are.
+- **The profile's ports are forwarded.** While the container runs, the extension forwards the ports of that
+  `applicationUrl` to `localhost` on Windows, together with `forwardPorts` from devcontainer.json, so
+  `http://localhost:5049` on Windows reaches the app as it would without a container. See
+  [port-forwarding.md](port-forwarding.md).
+
+## Project types
+
+Anything `dotnet run` starts works the same way. Checked on every pull request:
+
+| Project | How it is checked |
+| --- | --- |
+| ASP.NET Core Web API (`webapi`) | The sample API, from Visual Studio on Windows and from the launcher on Linux, over HTTP and HTTPS. |
+| Blazor Web App (`blazor`) | Made from the template in CI and run with its `http` profile; the page answers on the container's network interface. |
+| Worker service (`worker`) | Made from the template in CI; its log shows `Worker running at`. |
+| Console app (`console`) | `samples/dotnet-console`. |
+| Test projects | **Extensions > Dev Containers > Run Tests in Container** runs `dotnet test` for the solution in the container; the sample API's xUnit tests run there in CI. NUnit and MSTest run through the same `dotnet test`. |
+
+C#, F# and Visual Basic projects are all offered by the commands.
+
+**Several startup projects.** With **Configure Startup Projects > Multiple startup projects**, give each project
+its own **Dev Container** profile and select it. Each one opens its own window; they start the container one at
+a time (the first creates it, the others reuse it) and build one at a time, because they share the build output.
+This has been checked with two launchers started together on Linux, not yet from Visual Studio.
+
+**Aspire app hosts** are not supported yet: the app host starts its resources as containers, which needs a
+container engine inside the dev container (the `docker-outside-of-docker` feature), and its dashboard URLs are
+not adjusted for the container. Run the app host on Windows for now.
 
 ## Limits for now
 
 - **The profile runs without the debugger.** Start it with **Debug > Start Without Debugging** (Ctrl+F5). To
   debug, use **Extensions > Dev Containers > Start Debugging in Container**; see [debugging.md](debugging.md).
 - **.NET projects only.** The script runs `dotnet run`. TypeScript apps come with step 3 of the plan.
+- **`launchBrowser`** is ignored: no browser opens. Open the forwarded URL yourself.
 
 ## Tested
 

@@ -12,7 +12,8 @@
       4. copies the project's user secrets, your NuGet.Config, the HTTPS development certificate and your Git
          name, email and line ending settings into the container,
       5. stops the app if a previous run is still going in the container,
-      6. runs "dotnet run" for the project inside the container, in this window.
+      6. builds the project and runs it inside the container, in this window, with the launch profile's settings
+         (localhost URLs listen on every interface of the container, so forwarded ports reach the app).
 
     Stopping the app never stops the container, so VS Code and Visual Studio can share it.
 
@@ -20,11 +21,11 @@
     right after cloning. It works on Windows PowerShell 5.1 and PowerShell 7.
 
 .PARAMETER LaunchProfile
-    A launch profile of the project (commandName "Project") for dotnet run to use inside the container, for its
-    applicationUrl and environment variables. Leave empty to run without a launch profile.
+    A launch profile of the project (commandName "Project") to apply inside the container: its applicationUrl,
+    environment variables and command line arguments. Leave empty to run without a launch profile.
 
 .PARAMETER Project
-    The project folder or .csproj. Defaults to the current folder, which the launch profile sets to the project.
+    The project folder or project file (.csproj, .fsproj or .vbproj). Defaults to the current folder, which the launch profile sets to the project.
 
 .PARAMETER Config
     The devcontainer.json to use. Defaults to the one next to this script. The workspace folder is always the
@@ -203,7 +204,7 @@ function Invoke-DevContainer([string[]] $arguments) {
 
 function Get-UserSecretsId {
     # The project file (or the one project file in the project folder) holds the id 'dotnet user-secrets init' added.
-    $file = if (Test-Path $projectPath -PathType Leaf) { Get-Item $projectPath } else { Get-ChildItem $projectPath -Filter *.csproj | Select-Object -First 1 }
+    $file = if (Test-Path $projectPath -PathType Leaf) { Get-Item $projectPath } else { Get-ChildItem $projectPath -File | Where-Object { $_.Extension -in '.csproj', '.fsproj', '.vbproj' } | Select-Object -First 1 }
     if (-not $file) { return $null }
     $match = Select-String -Path $file.FullName -Pattern '<UserSecretsId>\s*([^<\s]+)\s*</UserSecretsId>' | Select-Object -First 1
     if ($match) { return $match.Matches[0].Groups[1].Value }
@@ -278,6 +279,26 @@ function ConvertTo-ShellLiteral([string] $value) {
     return "'" + $value.Replace("'", "'\''") + "'"
 }
 
+function Get-LaunchProfile([string] $name) {
+    # The project's launch profile (commandName "Project") to run with, as dotnet run would apply it.
+    if (-not $name) { return $null }
+    $folder = if (Test-Path $projectPath -PathType Leaf) { Split-Path -Parent $projectPath } else { $projectPath }
+    $file = Join-Path (Join-Path $folder 'Properties') 'launchSettings.json'
+    if (-not (Test-Path $file)) { Stop-WithError "The launch profile '$name' was not found: $file does not exist." }
+    try { $settings = Get-Content -Raw $file | ConvertFrom-Json } catch { Stop-WithError "$file is not valid JSON: $($_.Exception.Message)" }
+    $found = $settings.profiles.PSObject.Properties | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+    if (-not $found) { Stop-WithError "The launch profile '$name' was not found in $file." }
+    return $found.Value
+}
+
+function ConvertTo-ContainerUrls([string] $urls) {
+    # localhost in the container is the container's own loopback: the extension's port forwarding reaches it, but
+    # appPort, other Compose services and the container's address do not. Listen on every interface instead.
+    return (($urls -split ';' | Where-Object { $_.Trim() } | ForEach-Object {
+        $_.Trim() -replace '^([A-Za-z]+://)(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)', '${1}0.0.0.0'
+    }) -join ';')
+}
+
 function Get-HostGitSettings {
     # The Git settings that make Git in the container behave like Git on Windows: who commits, the line ending
     # conversion this repository's working tree was checked out with, and a few habits (aliases, default branch).
@@ -344,13 +365,15 @@ function Sync-HostState([string] $containerId, [string] $user, [switch] $NoProje
     $setup += 'fi'
     if ($gitSettings.Count -gt 0) { Write-Step 'Copying your Git name, email and line ending settings into the container' }
 
-    $files += , @('.vs-devcontainer/setup.sh', [System.Text.Encoding]::UTF8.GetBytes(($setup -join "`n") + "`n"))
+    # One script per run: projects started together (multiple startup projects) each copy at the same time.
+    $setupFile = ".vs-devcontainer/setup-$PID.sh"
+    $files += , @($setupFile, [System.Text.Encoding]::UTF8.GetBytes(($setup -join "`n") + "`n"))
     $lines = $files | ForEach-Object { $_[0] + ' ' + [Convert]::ToBase64String($_[1]) }
     $write = 'tr -d ''\r'' | while read p d; do mkdir -p $(dirname $HOME/$p) && echo $d | base64 -d > $HOME/$p && chmod 600 $HOME/$p || exit 1; done'
     $lines | & $engine exec -i -u $user $containerId sh -c $write
     if ($LASTEXITCODE -ne 0) { Write-Step 'Copying into the container failed; the app may miss secrets, feeds or the certificate.'; return }
 
-    & $engine exec -u $user $containerId sh -c 'sh $HOME/.vs-devcontainer/setup.sh; s=$?; rm -f $HOME/.vs-devcontainer/setup.sh; exit $s'
+    & $engine exec -u $user $containerId sh -c "sh `$HOME/$setupFile; s=`$?; rm -f `$HOME/$setupFile; exit `$s"
     if ($LASTEXITCODE -ne 0) { Write-Step 'Setting up the container for this computer failed (see above).' }
 }
 
@@ -391,6 +414,13 @@ if (-not $cli) {
 $engine = Find-ContainerEngine
 $common = @('--workspace-folder', $workspace, '--config', $configFile, '--docker-path', $engine) + (Get-DevContainerIdLabels)
 
+# Projects started together (multiple startup projects) would each create the container the first time. One at a
+# time: the others then find it running.
+$sha = [System.Security.Cryptography.SHA256]::Create()
+$lockName = 'vs-devcontainer-' + [BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($workspace.ToLowerInvariant()))).Replace('-', '').Substring(0, 16)
+$startLock = New-Object System.Threading.Mutex($false, $lockName)
+try { [void] $startLock.WaitOne() } catch [System.Threading.AbandonedMutexException] { }
+
 Write-Step "Starting the dev container for $workspace (the first time this builds it, which takes a while)"
 $upOutput = Invoke-DevContainer (@('up') + $common)
 if ($LASTEXITCODE -ne 0) {
@@ -402,6 +432,7 @@ if ($up.containerId) {
     $user = if ($up.remoteUser) { $up.remoteUser } else { 'root' }
     Sync-HostState $up.containerId $user
 }
+$startLock.ReleaseMutex()
 
 # A run stopped from Visual Studio ends this window but not the app inside the container. Stop it, so the port is
 # free again. Each run records its process group in a pid file. (No "--" before the group: dash, the sh of
@@ -412,12 +443,30 @@ Invoke-DevContainer (@('exec') + $common + @('sh', '-c', $stopPrevious)) | Out-N
 
 # Build into the container's own file system, not obj/ and bin/ in the mounted folder: Windows bind mounts (Podman and
 # Docker through WSL) do not let the container user set file times there, which fails the build (MSB3374), and
-# Visual Studio's own builds on the host use those folders too. (No quotes: Windows PowerShell passes them on
+# Visual Studio's own builds on the host use those folders too. (No double quotes: Windows PowerShell passes them on
 # unescaped.)
-$run = "dotnet run --project '$relativeProject' --property:UseArtifactsOutput=true --property:ArtifactsPath=`$HOME/.vs-devcontainer/build"
-$run += if ($LaunchProfile) { " --launch-profile '$LaunchProfile'" } else { ' --no-launch-profile' }
-if ($AppArgs.Count -gt 0) { $run += ' -- ' + (($AppArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' ') }
+$artifacts = '--property:UseArtifactsOutput=true --property:ArtifactsPath=$HOME/.vs-devcontainer/build'
+# Projects started together (multiple startup projects) share the build output, so they build one at a time.
+$build = "exec 9>/tmp/vs-run-build.lock; flock 9 2>/dev/null; dotnet build '$relativeProject' $artifacts || exit `$?; flock -u 9 2>/dev/null; exec 9>&-"
 
-Write-Step "Running in the container: $run"
-Invoke-DevContainer (@('exec') + $common + @('setsid', '-w', 'sh', '-c', "echo `$`$ > $pidFile; exec $run"))
+# The launch profile applies as dotnet run would apply it (environment variables, applicationUrl as
+# ASPNETCORE_URLS, command line arguments), except that localhost URLs listen on every interface of the container.
+$environment = @()
+$arguments = @()
+$launchSettings = Get-LaunchProfile $LaunchProfile
+if ($launchSettings) {
+    if ($launchSettings.environmentVariables) {
+        foreach ($variable in $launchSettings.environmentVariables.PSObject.Properties) { $environment += "$($variable.Name)=$($variable.Value)" }
+    }
+    if ($launchSettings.applicationUrl) { $environment += 'ASPNETCORE_URLS=' + (ConvertTo-ContainerUrls $launchSettings.applicationUrl) }
+    if ($launchSettings.commandLineArgs) { $arguments += , $launchSettings.commandLineArgs }
+}
+$arguments += @($AppArgs | ForEach-Object { ConvertTo-ShellLiteral $_ })
+
+$run = "dotnet run --no-build --project '$relativeProject' $artifacts --no-launch-profile"
+if ($environment.Count -gt 0) { $run = 'env ' + (($environment | ForEach-Object { ConvertTo-ShellLiteral $_ }) -join ' ') + ' ' + $run }
+if ($arguments.Count -gt 0) { $run += ' -- ' + ($arguments -join ' ') }
+
+Write-Step ("Running in the container: " + $(if ($LaunchProfile) { "$relativeProject with the '$LaunchProfile' profile" } else { $relativeProject }))
+Invoke-DevContainer (@('exec') + $common + @('setsid', '-w', 'sh', '-c', "echo `$`$ > $pidFile; $build; exec $run"))
 exit $LASTEXITCODE

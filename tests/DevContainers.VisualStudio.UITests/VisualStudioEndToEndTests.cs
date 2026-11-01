@@ -38,7 +38,10 @@ public sealed class VisualStudioEndToEndTests(ITestOutputHelper output)
         using var vs = VisualStudioDriver.Launch(Path.Combine(configFile.WorkspaceFolder, "HelloApi.slnx"), artifacts, this.Log);
         try
         {
-            // 1. The solution loads and the "Dev Container" launch profile is the selected one.
+            // 1. The solution loads, HelloApi is the startup project (the solution also has HelloApi.Tests, and a
+            // fresh Visual Studio does not always pick the first project), and the "Dev Container" launch profile is
+            // the selected one.
+            vs.SetStartupProject(@"HelloApi\HelloApi.csproj", TimeSpan.FromMinutes(5));
             // Only a progress signal: the toolbar's naming differs between Visual Studio versions, and the steps below
             // check the outcome themselves.
             vs.WaitForElement("Dev Container", TimeSpan.FromMinutes(3), "the 'Dev Container' launch profile in the toolbar");

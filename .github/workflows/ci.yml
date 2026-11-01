@@ -63,6 +63,31 @@ jobs:
           cat "$RUNNER_TEMP/info.json"
           grep -q '"inContainer":true' "$RUNNER_TEMP/info.json"
           grep -q '"greeting":"hello from the host"' "$RUNNER_TEMP/info.json"
+          # The profile's localhost URL listens on every interface in the container, so a forwarded port reaches it.
+          docker exec "$id" sh -c 'curl -sf http://$(hostname -i):5080/api/info'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Run a worker service and a Blazor app made from the project templates
+        working-directory: samples/dotnet-console
+        run: |
+          dotnet new worker -n HelloWorker -o HelloWorker
+          dotnet new blazor -n HelloBlazor -o HelloBlazor
+          (cd HelloWorker && nohup pwsh -NoProfile -File ../.devcontainer/vs-run.ps1 -LaunchProfile HelloWorker > "$RUNNER_TEMP/worker.log" 2>&1 &)
+          for i in $(seq 1 150); do grep -q "Worker running at" "$RUNNER_TEMP/worker.log" && break; sleep 4; done
+          cat "$RUNNER_TEMP/worker.log"
+          grep -q "Worker running at" "$RUNNER_TEMP/worker.log"
+
+          # The Blazor template's profile listens on localhost:<random port>.
+          port=$(jq -r '.profiles.http.applicationUrl' HelloBlazor/Properties/launchSettings.json | sed 's#.*:##')
+          (cd HelloBlazor && nohup pwsh -NoProfile -File ../.devcontainer/vs-run.ps1 -LaunchProfile http > "$RUNNER_TEMP/blazor.log" 2>&1 &)
+          for i in $(seq 1 150); do
+            id=$(docker ps -q --filter "label=devcontainer.local_folder=$PWD" | head -n 1)
+            if [ -n "$id" ] && docker exec "$id" sh -c "curl -sf http://\$(hostname -i):$port/" > "$RUNNER_TEMP/blazor.html"; then break; fi
+            sleep 4
+          done
+          cat "$RUNNER_TEMP/blazor.log"
+          grep -q "<title>Home</title>" "$RUNNER_TEMP/blazor.html"
 
   vsix:
     name: Build VSIX

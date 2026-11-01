@@ -2,18 +2,18 @@
 {
   "name": "dotnet-webapi",
   "image": "mcr.microsoft.com/devcontainers/dotnet:10.0",
-  // Kestrel has to listen on every interface inside the container, not only on its loopback, or a published or
-  // forwarded port leads nowhere. Properties/launchSettings.json does the same for launches that use a profile.
+  // For launches without a launch profile, such as dotnet run --no-launch-profile in the container terminal: listen
+  // on every interface inside the container, as the launch profiles do when the extension runs them (their localhost
+  // URLs become 0.0.0.0), so the container's address reaches the app and not only the extension's port forwarding.
   "containerEnv": {
     "ASPNETCORE_URLS": "http://0.0.0.0:5080",
     "ASPNETCORE_ENVIRONMENT": "Development"
   },
-  // Visual Studio (with the extension) and VS Code forward these ports to localhost while the container runs. Unlike
-  // appPort, nothing is published when the container is created, so the list can change without a rebuild.
-  "forwardPorts": [5080, 5443],
+  // Visual Studio (with the extension) and VS Code forward these ports to localhost while the container runs. The
+  // extension also forwards the ports of the launch profile that the Dev Container profile runs (5443 and 5080).
+  "forwardPorts": [5080],
   "portsAttributes": {
-    "5080": { "label": "HelloApi" },
-    "5443": { "label": "HelloApi (HTTPS)" }
+    "5080": { "label": "HelloApi" }
   },
   "postCreateCommand": "dotnet restore HelloApi.slnx",
   "customizations": {
